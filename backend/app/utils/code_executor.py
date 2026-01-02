@@ -1,8 +1,19 @@
 import pandas as pd
+import numpy as np
 from typing import Dict, Any
 from RestrictedPython import compile_restricted, safe_globals
-from RestrictedPython.Guards import guarded_iter_unpack_sequence, safe_builtins
+from RestrictedPython.Guards import (
+    guarded_iter_unpack_sequence, 
+    safe_builtins,
+    safer_getattr,
+    full_write_guard
+)
 import json
+
+
+def _getitem_(obj, index):
+    """Safe getitem implementation for RestrictedPython"""
+    return obj[index]
 
 
 def safe_execute_pandas_code(code: str, df: pd.DataFrame) -> Dict[str, Any]:
@@ -24,6 +35,9 @@ def safe_execute_pandas_code(code: str, df: pd.DataFrame) -> Dict[str, Any]:
         '__builtins__': safe_builtins,
         '_iter_unpack_sequence_': guarded_iter_unpack_sequence,
         '_getiter_': lambda x: iter(x),
+        '_getitem_': _getitem_,
+        '_getattr_': safer_getattr,
+        '_write_': full_write_guard,
         'json': json,
     }
     
@@ -58,10 +72,10 @@ def safe_execute_pandas_code(code: str, df: pd.DataFrame) -> Dict[str, Any]:
                 'data': result.to_dict(),
                 'name': result.name
             }
-        elif isinstance(result, (int, float, str, bool)):
+        elif isinstance(result, (int, float, str, bool, np.integer, np.floating)):
             return {
                 'type': 'scalar',
-                'value': result
+                'value': result if isinstance(result, (int, float, str, bool)) else result.item()
             }
         elif isinstance(result, dict):
             return {

@@ -1,6 +1,6 @@
-from langchain.agents import AgentExecutor, create_openai_tools_agent
+from langchain.agents import AgentExecutor, create_react_agent
 from langchain_openai import ChatOpenAI
-from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain.prompts import PromptTemplate
 from langchain.tools import Tool
 from langchain.memory import ConversationBufferMemory
 from typing import Dict, Any, Optional
@@ -141,43 +141,40 @@ Column Statistics:
         ]
     
     def _create_agent(self) -> AgentExecutor:
-        """Create the LangChain agent"""
+        """Create the LangChain agent using ReAct pattern"""
         
-        system_message = """You are an expert data analyst AI assistant. Your job is to help users analyze their data using Python and Pandas.
+        # ReAct prompt template
+        template = """You are a data analyst. Answer questions by executing Python code on a pandas DataFrame called 'df'.
 
-When a user asks a question about their data:
-1. First, understand the data structure using get_dataframe_info if needed
-2. Generate appropriate Python/Pandas code to answer the question
-3. Execute the code using execute_pandas_code
-4. Interpret the results and provide a clear, concise answer
-5. If visualization would help, describe what chart should be created
+You have these tools:
+{tools}
 
-Important guidelines:
-- Always use the 'df' variable to reference the dataframe
-- Write clean, efficient Pandas code
-- Handle errors gracefully
-- Provide insights, not just raw numbers
-- Be conversational and helpful
-- Remember context from previous questions
+Tool names: {tool_names}
 
-The dataframe 'df' is already loaded and available for analysis."""
+ALWAYS use this exact format:
 
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", system_message),
-            MessagesPlaceholder(variable_name="chat_history"),
-            ("human", "{input}"),
-            MessagesPlaceholder(variable_name="agent_scratchpad")
-        ])
+Question: the question to answer
+Thought: I need to execute code to get the answer
+Action: execute_pandas_code
+Action Input: result = df['column'].sum()
+Observation: {{"type": "scalar", "value": 123}}
+Thought: I now have the answer
+Final Answer: The total is 123
+
+Question: {input}
+Thought:{agent_scratchpad}"""
+
+        prompt = PromptTemplate.from_template(template)
         
-        agent = create_openai_tools_agent(self.llm, self.tools, prompt)
+        agent = create_react_agent(self.llm, self.tools, prompt)
         
         return AgentExecutor(
             agent=agent,
             tools=self.tools,
-            memory=self.memory,
-            verbose=settings.AGENT_VERBOSE,
-            max_iterations=settings.MAX_ITERATIONS,
-            handle_parsing_errors=True
+            verbose=True,
+            max_iterations=5,
+            handle_parsing_errors=True,
+            return_intermediate_steps=False
         )
     
     def analyze(self, query: str) -> Dict[str, Any]:
@@ -194,6 +191,9 @@ The dataframe 'df' is already loaded and available for analysis."""
             # Run the agent
             response = self.agent.invoke({"input": query})
             
+            # Extract the output
+            output = response.get("output", str(response))
+            
             # Extract generated code if any
             generated_code = self._extract_code_from_response(response)
             
@@ -203,7 +203,7 @@ The dataframe 'df' is already loaded and available for analysis."""
                 chart_data = self._generate_chart(query, generated_code)
             
             return {
-                "answer": response["output"],
+                "answer": output,
                 "generated_code": generated_code,
                 "chart_data": chart_data,
                 "success": True
@@ -220,11 +220,23 @@ The dataframe 'df' is already loaded and available for analysis."""
     
     def _extract_code_from_response(self, response: Dict) -> Optional[str]:
         """Extract Python code from agent response"""
-        # Check intermediate steps for executed code
-        if "intermediate_steps" in response:
-            for step in response["intermediate_steps"]:
-                if len(step) > 0 and hasattr(step[0], 'tool') and step[0].tool == "execute_pandas_code":
-                    return step[0].tool_input
+        # Try to extract code from the output text
+        output = response.get("output", "")
+        
+        # Look for code blocks in the response
+        if "```python" in output:
+            start = output.find("```python") + 9
+            end = output.find("```", start)
+            if end != -1:
+                return output[start:end].strip()
+        
+        # Look for result = pattern
+        if "result = " in output:
+            lines = output.split('\n')
+            code_lines = [line for line in lines if 'result = ' in line or 'df[' in line or 'df.' in line]
+            if code_lines:
+                return '\n'.join(code_lines)
+        
         return None
     
     def _should_create_chart(self, query: str, response: Dict) -> bool:

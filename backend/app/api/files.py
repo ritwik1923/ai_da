@@ -102,7 +102,7 @@ async def upload_file(
         raise HTTPException(status_code=500, detail=f"Error processing file: {str(e)}")
 
 
-@router.get("/files")
+@router.get("/")
 async def list_files(db: Session = Depends(get_db)):
     """
     Get list of all uploaded files
@@ -111,7 +111,7 @@ async def list_files(db: Session = Depends(get_db)):
     return files
 
 
-@router.get("/files/{file_id}")
+@router.get("/{file_id}")
 async def get_file(file_id: int, db: Session = Depends(get_db)):
     """
     Get details of a specific file
@@ -122,7 +122,7 @@ async def get_file(file_id: int, db: Session = Depends(get_db)):
     return file
 
 
-@router.delete("/files/{file_id}")
+@router.delete("/{file_id}")
 async def delete_file(file_id: int, db: Session = Depends(get_db)):
     """
     Delete an uploaded file
@@ -142,7 +142,7 @@ async def delete_file(file_id: int, db: Session = Depends(get_db)):
     return {"message": "File deleted successfully"}
 
 
-@router.get("/files/{file_id}/preview")
+@router.get("/{file_id}/preview")
 async def preview_file(file_id: int, limit: int = 10, db: Session = Depends(get_db)):
     """
     Get preview of file data

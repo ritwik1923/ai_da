@@ -62,7 +62,7 @@ def test_dangerous_code_blocked():
 def test_safe_code_allowed(sample_df):
     """Test that safe code executes successfully"""
     safe_codes = [
-        "result = df.mean()",
+        "result = df[['A', 'B']].mean()",  # Only numeric columns
         "result = df.groupby('C')['A'].sum()",
         "result = df['A'].max()"
     ]
