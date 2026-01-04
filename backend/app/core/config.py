@@ -54,7 +54,7 @@ class Settings(BaseSettings):
         return v
     
     # Agent Settings
-    MAX_ITERATIONS: int = 10
+    MAX_ITERATIONS: int = 15
     AGENT_VERBOSE: bool = True
     
     class Config:

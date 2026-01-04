@@ -144,22 +144,34 @@ Column Statistics:
         """Create the LangChain agent using ReAct pattern"""
         
         # ReAct prompt template
-        template = """You are a data analyst. Answer questions by executing Python code on a pandas DataFrame called 'df'.
+        template = """You are a data analyst. Answer questions efficiently by executing Python code on a pandas DataFrame called 'df'.
 
 You have these tools:
 {tools}
 
 Tool names: {tool_names}
 
+IMPORTANT EFFICIENCY RULES:
+1. For chart/visualization requests, execute code directly WITHOUT calling get_dataframe_info first
+2. Only call get_dataframe_info if you truly don't know what columns exist
+3. Write complete analysis code in ONE execute_pandas_code call when possible
+4. Be direct - don't overthink simple questions
+
+CRITICAL CHART RULE:
+- NEVER save charts to files (no plt.savefig, no .png files)
+- ONLY return the aggregated DATA as a dictionary/dataframe
+- The frontend will handle visualization automatically
+- Example: return {{'data': df.groupby('Region')['Sales'].sum().to_dict()}}
+
 ALWAYS use this exact format:
 
 Question: the question to answer
-Thought: I need to execute code to get the answer
+Thought: I should execute code to analyze this
 Action: execute_pandas_code
-Action Input: result = df['column'].sum()
-Observation: {{"type": "scalar", "value": 123}}
+Action Input: result = df.groupby('Region')['Subscription'].count().to_dict()
+Observation: {{"type": "dict", "data": {{"Region1": 120, "Region2": 95}}}}
 Thought: I now have the answer
-Final Answer: The total is 123
+Final Answer: The subscription counts by region are: Region1: 120, Region2: 95. A chart has been generated.
 
 Question: {input}
 Thought:{agent_scratchpad}"""
@@ -171,10 +183,11 @@ Thought:{agent_scratchpad}"""
         return AgentExecutor(
             agent=agent,
             tools=self.tools,
-            verbose=True,
-            max_iterations=5,
+            verbose=settings.AGENT_VERBOSE,
+            max_iterations=settings.MAX_ITERATIONS,
             handle_parsing_errors=True,
-            return_intermediate_steps=False
+            early_stopping_method="force",
+            return_intermediate_steps=True
         )
     
     def analyze(self, query: str) -> Dict[str, Any]:
@@ -193,14 +206,49 @@ Thought:{agent_scratchpad}"""
             
             # Extract the output
             output = response.get("output", str(response))
+
+            # If LangChain hits an internal stop condition, avoid surfacing the raw message.
+            if isinstance(output, str) and "agent stopped" in output.lower():
+                output = (
+                    "I couldn’t complete the full reasoning loop within my step/time budget. "
+                    "Try asking a narrower question (one chart/metric at a time), or increase "
+                    "`MAX_ITERATIONS` in the backend `.env`."
+                )
             
             # Extract generated code if any
             generated_code = self._extract_code_from_response(response)
             
             # Generate chart if applicable
             chart_data = None
-            if self._should_create_chart(query, response):
+            # Only generate charts when we actually executed/produced code and the response
+            # isn't indicating missing columns / failure.
+            output_lower = output.lower() if isinstance(output, str) else ""
+            should_skip_chart = any(
+                phrase in output_lower
+                for phrase in [
+                    "does not contain",
+                    "not found",
+                    "no data file",
+                    "encountered an error",
+                    "analysis failed",
+                ]
+            )
+
+            if generated_code and self._should_create_chart(query, response) and not should_skip_chart:
+                print(f"[CHART] Attempting chart generation for query: {query[:50]}...")
                 chart_data = self._generate_chart(query, generated_code)
+                if chart_data:
+                    print("[CHART] ✓ Chart generated successfully")
+                else:
+                    print("[CHART] ✗ Chart generation returned None (no suitable data/columns)")
+                    # If LLM claims to have created a chart but we have no chart_data,
+                    # append a clarification to the answer.
+                    if "chart" in output.lower() and ("created" in output.lower() or "saved" in output.lower()):
+                        output += (
+                            "\n\n*Note: The code saves a chart file on the server, but it won't display here. "
+                            "For interactive charts in this UI, ask me to 'show' or 'visualize' the data "
+                            "without saving to a file.*"
+                        )
             
             return {
                 "answer": output,
@@ -220,7 +268,18 @@ Thought:{agent_scratchpad}"""
     
     def _extract_code_from_response(self, response: Dict) -> Optional[str]:
         """Extract Python code from agent response"""
-        # Try to extract code from the output text
+        # First check intermediate steps for execute_pandas_code action
+        intermediate_steps = response.get("intermediate_steps", [])
+        for step in intermediate_steps:
+            if len(step) >= 1:
+                action = step[0]
+                # Check if this was an execute_pandas_code action
+                if hasattr(action, 'tool') and action.tool == 'execute_pandas_code':
+                    return action.tool_input
+                elif hasattr(action, 'tool_input'):
+                    return action.tool_input
+        
+        # Fallback: try to extract code from the output text
         output = response.get("output", "")
         
         # Look for code blocks in the response
