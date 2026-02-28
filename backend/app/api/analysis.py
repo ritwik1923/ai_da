@@ -7,7 +7,7 @@ import time
 from app.core.database import get_db
 from app.models.models import UploadedFile, AnalysisResult
 from app.schemas.schemas import AnalysisRequest, AnalysisResponse
-from app.agents.data_analyst import DataAnalystAgent
+from app.agents.data_analyst_v2 import DataAnalystAgent
 
 router = APIRouter()
 

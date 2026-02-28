@@ -13,7 +13,8 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "postgresql://ai_analyst:secure_password_123@localhost:5432/ai_data_analyst"
     
     # LLM Provider Settings
-    LLM_PROVIDER: str = "openai"  # Options: "openai" or "company"
+    # LLM_PROVIDER: str = "openai"  # Options: "openai" or "company"
+    LLM_PROVIDER: str = "local_llm"  # Options: "openai" or "company"
     
     # OpenAI Settings
     OPENAI_API_KEY: str = ""
@@ -54,7 +55,9 @@ class Settings(BaseSettings):
         return v
     
     # Agent Settings
-    MAX_ITERATIONS: int = 15
+    MAX_ITERATIONS: int = 150
+    LOCAL_LLM_MAX_ITERATIONS: int = 50  # Low for local models; Mistral typically completes in 3-4 iterations
+    OLLAMA_MODEL: str = "mistral"  # Mistral is more instruction-following than llama3
     AGENT_VERBOSE: bool = True
     
     class Config:

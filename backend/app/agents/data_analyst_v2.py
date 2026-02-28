@@ -18,7 +18,7 @@ import sys
 from app.core.config import settings
 from app.utils.code_executor import safe_execute_pandas_code
 from app.utils.chart_generator import generate_chart
-from app.utils.custom_llm import CompanyGenAILLM
+from app.utils.custom_llm import CompanyGenAILLM, OllamaLocalLLM
 from app.utils.data_passport import generate_data_passport, DataPassport
 from app.utils.column_vector_store import ColumnVectorStore, ColumnSelector
 from app.utils.self_healing_executor import SelfHealingExecutor
@@ -28,6 +28,7 @@ from app.prompts.expert_prompts import (
     COLUMN_SELECTION_PROMPT,
     get_error_fix_prompt,
     format_schema_for_prompt
+    
 )
 
 
@@ -89,9 +90,9 @@ class EnhancedDataAnalystAgent:
         if conversation_memory:
             for msg in conversation_memory:
                 if msg['role'] == 'user':
-                    self.memory.chat_memory.add_user_message(msg['content'])
+                    self.memory.save_context({"input": msg['content']}, {"output": ""})
                 elif msg['role'] == 'assistant':
-                    self.memory.chat_memory.add_ai_message(msg['content'])
+                    self.memory.save_context({"input": ""}, {"output": msg['content']})
         
         # Create tools for the agent
         self.tools = self._create_tools()
@@ -113,13 +114,16 @@ class EnhancedDataAnalystAgent:
                 temperature=0,
                 max_tokens=3000
             )
-        else:  # Default to OpenAI
-            return ChatOpenAI(
-                model=settings.OPENAI_MODEL,
-                temperature=0,
-                api_key=settings.OPENAI_API_KEY,
-                max_tokens=3000
-            )
+        elif provider == "local_llm":
+            print("\n\nUsing local Ollama LLM...\n\n")
+            return OllamaLocalLLM()
+        # else:  # Default to OpenAI
+        #     return ChatOpenAI(
+        #         model=settings.OPENAI_MODEL,
+        #         temperature=0,
+        #         api_key=settings.OPENAI_API_KEY,
+        #         max_tokens=3000
+        #     )
     
     def _initialize_column_rag(self):
         """Initialize RAG system for column selection."""
@@ -130,7 +134,7 @@ class EnhancedDataAnalystAgent:
         
         # Get column descriptions
         column_descriptions = self.passport.get_column_descriptions()
-        
+         
         # Prepare metadata
         metadata = {}
         for col in self.passport.passport['schema']:
@@ -300,13 +304,45 @@ Use these column names EXACTLY as shown.
     def _create_agent(self) -> AgentExecutor:
         """Create the LangChain agent using ReAct pattern with expert prompts."""
         
-        # Build context about dataset size
-        dataset_info = f"""
+        # For local LLMs, use simpler prompt; for cloud LLMs, use detailed prompts
+        provider = settings.LLM_PROVIDER.lower()
+        
+        if provider == "local_llm":
+            # Ultra-simple prompt for Mistral - minimal placeholders, maximum clarity
+            # NOTE: NO {agent_scratchpad} - Mistral can't handle growing JSON context
+            template = """You must respond in this exact format with 3 lines. Nothing more, nothing less.
+
+Thought: [why you need a tool - 1 short sentence]
+Action: [get_dataframe_schema OR execute_pandas_code OR search_columns OR get_data_quality_report OR Final Answer]
+Action Input: [your Python code STARTING WITH result=, parameter, or final answer]
+
+CRITICAL RULES:
+1. Your response MUST have exactly 3 lines.
+2. Line 1 starts with "Thought:", line 2 starts with "Action:", line 3 starts with "Action Input:"
+3. Do NOT add explanations, examples, or extra text before/after.
+4. For execute_pandas_code: ALWAYS start code with "result = " (example: "result = df.head(5)")
+5. If you have the final answer, use: Action: Final Answer
+
+EXAMPLE:
+Thought: Display first 5 rows
+Action: execute_pandas_code
+Action Input: result = df.head(5)
+
+Available tools:
+{tool_names}
+
+{tools}
+
+Question: {input}
+Thought:"""
+        else:
+            # Build context about dataset size for cloud LLMs
+            dataset_info = f"""
 Dataset: {len(self.df):,} rows × {len(self.df.columns):,} columns ({self.passport.passport['metadata']['memory_usage_mb']:.1f} MB)
 Column RAG: {'Enabled' if self.enable_column_rag else 'Disabled'}
 """
-        
-        template = MASTER_ANALYST_SYSTEM_PROMPT + """
+            
+            template = MASTER_ANALYST_SYSTEM_PROMPT + """
 
 ## Current Dataset
 """ + dataset_info + """
@@ -346,18 +382,27 @@ Final Answer: [insight with context and recommendations]
 
 {agent_scratchpad}"""
 
-        prompt = PromptTemplate.from_template(template)
+        # Explicitly declare required input variables so formatting does not fail
+        prompt = PromptTemplate(template=template, input_variables=["input", "tool_names", "tools", "agent_scratchpad"])
         
         agent = create_react_agent(self.llm, self.tools, prompt)
         
+        # For local LLMs prefer fewer iterations and no intermediate steps to reduce latency
+        if provider == "local_llm":
+            agent_max_iterations = 10  # Very low to prevent loops
+            return_intermediate = False
+        else:
+            agent_max_iterations = settings.MAX_ITERATIONS
+            return_intermediate = True
+
         return AgentExecutor(
             agent=agent,
             tools=self.tools,
             verbose=settings.AGENT_VERBOSE,
-            max_iterations=settings.MAX_ITERATIONS,
+            max_iterations=agent_max_iterations,
             handle_parsing_errors=True,
             early_stopping_method="force",
-            return_intermediate_steps=True
+            return_intermediate_steps=return_intermediate
         )
     
     def analyze(self, query: str) -> Dict[str, Any]:

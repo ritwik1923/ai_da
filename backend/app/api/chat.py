@@ -7,7 +7,7 @@ from datetime import datetime
 from app.core.database import get_db
 from app.models.models import Conversation, Message, UploadedFile
 from app.schemas.schemas import ChatRequest, ChatResponse, ConversationHistory, ChatMessage
-from app.agents.data_analyst import DataAnalystAgent
+from app.agents.data_analyst_v2 import DataAnalystAgent
 
 router = APIRouter()
 

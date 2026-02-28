@@ -2,6 +2,7 @@ from fastapi import FastAPI, UploadFile, File, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 import uvicorn
 
 from app.core.config import settings
@@ -49,7 +50,7 @@ async def health_check(db: Session = Depends(get_db)):
     """Health check endpoint"""
     try:
         # Check database connection
-        db.execute("SELECT 1")
+        db.execute(text("SELECT 1"))
         return {"status": "healthy", "database": "connected"}
     except Exception as e:
         return JSONResponse(

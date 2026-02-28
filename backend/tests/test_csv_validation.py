@@ -4,7 +4,7 @@ Tests basic exploration, sales analysis, product/regional analysis, and hallucin
 """
 import pytest
 import pandas as pd
-from app.agents.data_analyst import DataAnalystAgent
+from app.agents.data_analyst_v2 import DataAnalystAgent
 
 
 @pytest.fixture

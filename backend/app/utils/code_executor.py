@@ -9,11 +9,92 @@ from RestrictedPython.Guards import (
     full_write_guard
 )
 import json
+import re
 
 
 def _getitem_(obj, index):
     """Safe getitem implementation for RestrictedPython"""
     return obj[index]
+
+
+def _clean_code(code: str) -> str:
+    """
+    Remove non-code text from the code string.
+    This is critical because the LLM may mix ReAct format lines into the code.
+    """
+    # FIRST: Cut off at any ReAct format keyword that appears
+    # This prevents "Thought:", "Action:", etc. from being treated as code
+    react_keywords = ['Thought:', 'Action:', 'Observation:', 'Action Input:', 'Final Answer:']
+    for keyword in react_keywords:
+        if keyword in code:
+            code = code.split(keyword)[0]
+    
+    # Now clean up individual lines
+    lines = code.split('\n')
+    cleaned = []
+    
+    for line in lines:
+        stripped = line.strip()
+        
+        # Skip empty lines
+        if not stripped:
+            cleaned.append(line)
+            continue
+        
+        # Skip markdown code blocks
+        if stripped == '```' or stripped.startswith('```'):
+            continue
+        
+        # Skip lines that are clearly natural language explanations
+        lower_line = stripped.lower()
+        if any(phrase in lower_line for phrase in [
+            'please wait',
+            'i\'ll',
+            "i will",
+            'here\'s',
+            'here is',
+            'now i',
+            'let me',
+            'as you can see',
+            'the code',
+            'this code',
+            'executing',
+            'analyzing',
+            'calculating',
+            'note:',
+            'example:',
+            'explanation:',
+            'in this corrected',
+            'in the corrected',
+            'in python',
+            'should resolve',
+            'this should',
+            'will help',
+            'to perform',
+            'to identify',
+            'to analyze',
+        ]):
+            continue
+        
+        # Skip obvious comment lines that are explanations
+        if stripped.startswith('#') and any(word in stripped.lower() for word in ['wait', 'please', 'example', 'explanation']):
+            continue
+        
+        cleaned.append(line)
+    
+    result = '\n'.join(cleaned).strip()
+    
+    # If result is empty or too short, return original
+    if not result or len(result) < 3:
+        return code
+    
+    return result
+
+    # If result is empty or too short, return original
+    if not result or len(result) < 5:
+        return code
+    
+    return result
 
 
 def safe_execute_pandas_code(code: str, df: pd.DataFrame) -> Dict[str, Any]:
@@ -27,6 +108,9 @@ def safe_execute_pandas_code(code: str, df: pd.DataFrame) -> Dict[str, Any]:
     Returns:
         Dictionary with execution results
     """
+    
+    # Clean the code to remove non-code text that LLMs might include
+    code = _clean_code(code)
     
     # Create a safe execution environment
     safe_locals = {

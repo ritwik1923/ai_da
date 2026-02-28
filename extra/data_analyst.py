@@ -171,33 +171,36 @@ Column Statistics:
         provider = settings.LLM_PROVIDER.lower()
         
         if provider == "local_llm":
-            # Ultra-simple prompt for Mistral - minimal placeholders, maximum clarity
-            # {agent_scratchpad} at end but kept minimal to avoid confusing context
-            template = """You must respond in this exact format with 3 lines. Nothing more, nothing less.
+            # Stricter prompt for local LLMs - force ReAct format compliance
+            template = """You are a data analyst. RESPOND ONLY WITH EXACT FORMAT - NO EXTRA TEXT.
 
-Thought: [why you need a tool - 1 short sentence]
-Action: [get_dataframe_info OR execute_pandas_code OR analyze_column OR Final Answer]
-Action Input: [your Python code STARTING WITH result=, parameter, or final answer]
+Tools: {tools}
 
-CRITICAL RULES:
-1. Your response MUST have exactly 3 lines.
-2. Line 1 starts with "Thought:", line 2 starts with "Action:", line 3 starts with "Action Input:"
-3. Do NOT add explanations, examples, or extra text before/after.
-4. For execute_pandas_code: ALWAYS start code with "result = " (example: "result = df.head(5)")
-5. If you have the final answer, use: Action: Final Answer
+Tool names: {tool_names}
 
-EXAMPLE:
-Thought: Display first 5 rows
-Action: execute_pandas_code
-Action Input: result = df.head(5)
+VALID TOOLS (use ONLY these):
+- get_dataframe_info: Get structure, columns, data types
+- execute_pandas_code: Execute Python/Pandas code
+- analyze_column: Get statistics for a column
 
-Available tools:
-{tool_names}
+FORMAT (EXACTLY 3 LINES):
+Thought: [why you need this tool]
+Action: [get_dataframe_info OR execute_pandas_code OR analyze_column]
+Action Input: [code or parameter]
 
-{tools}
+RULES:
+- 3 lines only
+- NO extra text
+- NO "I'm ready", "I understand", "Let me", conversational responses
+- After observation, immediately respond with Thought/Action/Action Input
+
+Final answer format:
+Thought: I have the answer
+Action: Final Answer
+Action Input: [your answer]
 
 Question: {input}
-{agent_scratchpad}Thought:"""
+Thought:{agent_scratchpad}"""
         else:
             # Original ReAct prompt for GPT/Claude models
             template = """You are a data analyst. Answer questions efficiently by executing Python code on a pandas DataFrame called 'df'.
@@ -232,8 +235,7 @@ Final Answer: The subscription counts by region are: Region1: 120, Region2: 95. 
 Question: {input}
 Thought:{agent_scratchpad}"""
 
-        # Explicitly declare required input variables so formatting does not fail
-        prompt = PromptTemplate(template=template, input_variables=["input", "tool_names", "tools", "agent_scratchpad"])
+        prompt = PromptTemplate.from_template(template)
         
         agent = create_react_agent(self.llm, self.tools, prompt)
         

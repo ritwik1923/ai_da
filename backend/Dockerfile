@@ -4,15 +4,27 @@ WORKDIR /app
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
+    build-essential \
     gcc \
+    gfortran \
+    cmake \
+    pkg-config \
+    libpq-dev \
+    libssl-dev \
+    libffi-dev \
+    libopenblas-dev \
+    libomp-dev \
     postgresql-client \
+    git \
+    wget \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements
 COPY requirements.txt .
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+# Upgrade packaging tooling and install Python dependencies
+RUN pip install --upgrade pip setuptools wheel && \
+    pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY . .
