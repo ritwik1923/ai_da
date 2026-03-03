@@ -235,7 +235,11 @@ Final Answer: The subscription counts by region are: Region1: 120, Region2: 95. 
 Question: {input}
 Thought:{agent_scratchpad}"""
 
-        prompt = PromptTemplate.from_template(template)
+        # Ensure agent_scratchpad is available
+        prompt = PromptTemplate(
+            template=template,
+            input_variables=["input", "tool_names", "tools", "agent_scratchpad"]
+        )
         
         agent = create_react_agent(self.llm, self.tools, prompt)
         
@@ -269,7 +273,8 @@ Thought:{agent_scratchpad}"""
         """
         try:
             # Run the agent
-            response = self.agent.invoke({"input": query})
+            # include empty scratchpad for formatting
+            response = self.agent.invoke({"input": query, "agent_scratchpad": ""})
             
             # Extract the output
             output = response.get("output", str(response))

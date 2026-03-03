@@ -5,7 +5,7 @@ import pytest
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
-from app.agents.data_analyst_v2 import DataAnalystAgent
+from backend.app.agents.data_analyst_v2 import DataAnalystAgent
 from app.core.config import settings
 
 

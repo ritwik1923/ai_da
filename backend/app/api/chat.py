@@ -109,7 +109,7 @@ async def send_message(
         )
         db.add(error_message)
         db.commit()
-        
+        print(f"Error processing message: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

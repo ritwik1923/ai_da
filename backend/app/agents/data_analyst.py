@@ -233,7 +233,10 @@ Question: {input}
 Thought:{agent_scratchpad}"""
 
         # Explicitly declare required input variables so formatting does not fail
-        prompt = PromptTemplate(template=template, input_variables=["input", "tool_names", "tools", "agent_scratchpad"])
+        prompt = PromptTemplate(
+            template=template,
+            input_variables=["input", "tool_names", "tools", "agent_scratchpad"]
+        )
         
         agent = create_react_agent(self.llm, self.tools, prompt)
         
@@ -267,7 +270,8 @@ Thought:{agent_scratchpad}"""
         """
         try:
             # Run the agent
-            response = self.agent.invoke({"input": query})
+            # Provide an empty scratchpad to satisfy prompt template requirements
+            response = self.agent.invoke({"input": query, "agent_scratchpad": ""})
             
             # Extract the output
             output = response.get("output", str(response))
