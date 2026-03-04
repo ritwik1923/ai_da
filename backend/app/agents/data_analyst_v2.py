@@ -84,7 +84,10 @@ class EnhancedDataAnalystAgent:
             Generate Python code using the 'df' variable.
             Task: {task_description}
             Schema Context: {self.df.columns.tolist()}
-            Rule: Store the result in a variable named 'result'.
+            Rule: 
+            1. Store the result in a variable named 'result'.
+            2. dont use dummy data to perform the analysis, use the provided dataframe 'df' and its columns.
+            3. generate syntax free code without markdown formatting.
             Return ONLY code.
             """
             
@@ -117,46 +120,41 @@ class EnhancedDataAnalystAgent:
                 description="Describe the analysis task in plain English. DeepSeek will write the code."
             )
         ]
-
     def _create_agent(self) -> AgentExecutor:
-        # 1. Format the conversation history
+        # History formatting (keep your existing history loop here)
         history_text = ""
         if hasattr(self, 'conversation_memory') and self.conversation_memory:
             history_text = "## Previous Conversation:\n"
             for msg in self.conversation_memory:
-                # msg is a dict like {"role": "user", "content": "..."}
                 role = "User" if msg.get("role") == "user" else "Assistant"
                 history_text += f"{role}: {msg.get('content')}\n"
             history_text += "\n"
 
-        # 2. Add the history variable to your template
         template = f"""You are a Data Analyst Manager. 
 
 {history_text}
-## Logic Loop:
-1. Call get_dataframe_schema to see available columns.
-2. If the user asks for a metric and it's NOT in the schema, STOP immediately.
-3. If it IS in the schema, call execute_analysis.
+## Rules:
+1. ALWAYS use get_dataframe_schema first to check available columns.
+2. If the data needed is missing, STOP and provide a Final Answer.
+3. If the data exists, call execute_analysis.
 
-## To End the Task:
-When you have the final answer OR realize it's impossible, you MUST use:
-Thought: I have the final conclusion.
-Final Answer: [Your clear explanation here]
+## STRICT FORMATTING:
+You must ONLY output the Thought, Action, and Action Input. 
+**DO NOT generate the Observation.** The system will provide the Observation.
 
-## Tool Format Rules:
-Thought: [logic]
+Thought: [your reasoning]
 Action: [tool_name]
-Action Input: [query/description]
+Action Input: [tool input]
+
+When you have the final answer:
+Thought: I have the final conclusion.
+Final Answer: [Your exact answer]
 
 Available Tools: {{tool_names}}
 {{tools}}
 
 Question: {{input}}
-{{agent_scratchpad}}
-Thought:"""
-
-        # Notice how I used f-strings to inject history_text, but doubled the braces 
-        # {{ }} for LangChain's internal variables so they don't get evaluated early.
+{{agent_scratchpad}}"""
 
         prompt = PromptTemplate(
             template=template, 

@@ -74,7 +74,8 @@ class SelfHealingExecutor:
             ExecutionResult with success status and result/error
         """
         current_code = code
-        
+        print(f"Executing code with self-healing (max {self.max_retries} attempts)...")
+        print(f"Initial code:\n{current_code}\n{'-'*40}")
         for attempt in range(1, self.max_retries + 1):
             result = self._try_execute(current_code, attempt)
             self.execution_history.append(result)
