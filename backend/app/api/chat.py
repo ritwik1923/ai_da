@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 import pandas as pd
 import uuid
 from datetime import datetime
+from starlette.concurrency import run_in_threadpool
 
 from app.core.database import get_db
 from app.models.models import Conversation, Message, UploadedFile
@@ -10,6 +11,17 @@ from app.schemas.schemas import ChatRequest, ChatResponse, ConversationHistory, 
 from app.agents.data_analyst_v2 import DataAnalystAgent
 
 router = APIRouter()
+
+
+def _load_dataframe(file_type: str, file_path: str) -> pd.DataFrame:
+    if file_type == '.csv':
+        return pd.read_csv(file_path)
+    return pd.read_excel(file_path)
+
+
+def _run_agent_analysis(df: pd.DataFrame, conversation_memory: list, query: str):
+    agent = DataAnalystAgent(df, conversation_memory)
+    return agent.analyze(query)
 
 
 @router.post("/message", response_model=ChatResponse)
@@ -54,11 +66,7 @@ async def send_message(
             if not file:
                 raise HTTPException(status_code=404, detail="File not found")
             
-            # Load dataframe
-            if file.file_type == '.csv':
-                df = pd.read_csv(file.file_path)
-            else:
-                df = pd.read_excel(file.file_path)
+            df = await run_in_threadpool(_load_dataframe, file.file_type, file.file_path)
         
         if df is None:
             raise HTTPException(
@@ -75,10 +83,14 @@ async def send_message(
             {"role": msg.role, "content": msg.content}
             for msg in previous_messages[:-1]  # Exclude the current message
         ]
-        
-        # Create agent and analyze
-        agent = DataAnalystAgent(df, conversation_memory)
-        result = agent.analyze(request.message)
+        # TODO remove this memory limit after we have better handling in the agent
+        conversation_memory = []
+        result = await run_in_threadpool(
+            _run_agent_analysis,
+            df,
+            conversation_memory,
+            request.message,
+        )
         
         # Save assistant response
         assistant_message = Message(

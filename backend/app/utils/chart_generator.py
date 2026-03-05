@@ -15,6 +15,26 @@ _CHART_INTENT_WORDS: Set[str] = {
 }
 
 
+def _select_column_by_query_terms(query_lower: str, columns: List[str], preferred_terms: List[str]) -> Optional[str]:
+    """Pick the best matching column based on query terms and column names."""
+    if not columns:
+        return None
+
+    columns_lower = {str(c).lower(): c for c in columns}
+
+    for term in preferred_terms:
+        for col_lower, original in columns_lower.items():
+            if term in col_lower:
+                return original
+
+    for token in re.findall(r"[a-zA-Z]{3,}", query_lower):
+        for col_lower, original in columns_lower.items():
+            if token in col_lower:
+                return original
+
+    return columns[0]
+
+
 def _tokenize_subject_terms(query_lower: str) -> List[str]:
     # Keep only alphabetic tokens; remove generic chart intent + filler words.
     tokens = re.findall(r"[a-zA-Z]{3,}", query_lower)
@@ -132,7 +152,12 @@ def generate_chart(df: pd.DataFrame, query: str, code: Optional[str] = None) -> 
     # If code was executed, try to extract the aggregation result
     chart_from_code = None
     if code:
-        chart_from_code = _create_chart_from_code(df, code, query)
+        # If user explicitly asks for "each/all" categories, avoid honoring
+        # top-N slicing from generated code and fall back to query-driven chart.
+        prefers_full_breakdown = any(k in query_lower for k in ["for each", "each", "all", "every"])
+        code_has_top_n = any(k in code.lower() for k in ["head(", "nlargest(", "nsmallest("])
+        if not (prefers_full_breakdown and code_has_top_n):
+            chart_from_code = _create_chart_from_code(df, code, query)
         if chart_from_code:
             return chart_from_code
     
@@ -200,18 +225,38 @@ def create_bar_chart(df: pd.DataFrame, query: str) -> Optional[Dict[str, Any]]:
     if not categorical_columns or not numeric_columns:
         return None
     
-    x_col = categorical_columns[0]
-    y_col = numeric_columns[0]
+    query_lower = query.lower()
+    x_col = _select_column_by_query_terms(
+        query_lower,
+        categorical_columns,
+        preferred_terms=["category", "brand", "availability", "status", "color", "name", "type"]
+    )
+    y_col = _select_column_by_query_terms(
+        query_lower,
+        numeric_columns,
+        preferred_terms=["stock", "price", "count", "total", "sum", "quantity", "amount", "value"]
+    )
     
-    # Aggregate data
-    grouped = df.groupby(x_col, dropna=False)[y_col].sum().reset_index()
-    grouped = grouped.nlargest(10, y_col)  # Top 10
+    # Aggregate data based on intent
+    if any(word in query_lower for word in ['count', 'how many', 'frequency']):
+        grouped = df.groupby(x_col, dropna=False).size().reset_index(name='Value')
+        y_plot_col = 'Value'
+    elif any(word in query_lower for word in ['average', 'mean']):
+        grouped = df.groupby(x_col, dropna=False)[y_col].mean().reset_index()
+        y_plot_col = y_col
+    else:
+        grouped = df.groupby(x_col, dropna=False)[y_col].sum().reset_index()
+        y_plot_col = y_col
+
+    show_all_groups = any(k in query_lower for k in ['for each', 'each', 'all', 'every'])
+    if not show_all_groups and len(grouped) > 10:
+        grouped = grouped.nlargest(10, y_plot_col)
     
     fig = px.bar(
         grouped,
         x=x_col,
-        y=y_col,
-        title=f"{y_col} by {x_col}"
+        y=y_plot_col,
+        title=f"{y_plot_col} by {x_col}"
     )
     
     return {

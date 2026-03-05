@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 from datetime import datetime
 import uuid
+from starlette.concurrency import run_in_threadpool
 
 from app.core.database import get_db
 from app.core.config import settings
@@ -12,6 +13,14 @@ from app.models.models import UploadedFile
 from app.schemas.schemas import FileUploadResponse
 
 router = APIRouter()
+
+
+def _read_dataframe(file_ext: str, file_path: str) -> pd.DataFrame:
+    if file_ext == '.csv':
+        return pd.read_csv(file_path)
+    if file_ext in ['.xlsx', '.xls']:
+        return pd.read_excel(file_path)
+    raise ValueError("Unsupported file format")
 
 # Ensure upload directory exists
 Path(settings.UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
@@ -54,13 +63,7 @@ async def upload_file(
         f.write(content)
     
     try:
-        # Load data based on file type
-        if file_ext == '.csv':
-            df = pd.read_csv(file_path)
-        elif file_ext in ['.xlsx', '.xls']:
-            df = pd.read_excel(file_path)
-        else:
-            raise HTTPException(status_code=400, detail="Unsupported file format")
+        df = await run_in_threadpool(_read_dataframe, file_ext, file_path)
         
         # Extract metadata
         columns_info = []
