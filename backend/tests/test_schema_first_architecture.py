@@ -13,7 +13,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from app.utils.data_passport import generate_data_passport, DataPassport
-from app.utils.column_vector_store import ColumnVectorStore, ColumnSelector
+from backend.app.agents.utility.column_vector_store import ColumnVectorStore, ColumnSelector
 from app.utils.self_healing_executor import SelfHealingExecutor, ErrorCategory
 
 

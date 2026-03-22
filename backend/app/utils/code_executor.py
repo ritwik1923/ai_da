@@ -17,83 +17,6 @@ def _getitem_(obj, index):
     return obj[index]
 
 
-# def _clean_code(code: str) -> str:
-#     """
-#     Enhanced cleaning to remove natural language and repair Mistral syntax errors.
-#     """
-#     # 1. FIX MISTRAL NESTING: Remove tool name if LLM wrote Action Input: execute_pandas_code("...")
-#     code = re.sub(r"execute_pandas_code\s*\(\s*['\"]+(.*?)['\"]+\s*\)", r"\1", code, flags=re.DOTALL)
-    
-#     # 2. FIX MISTRAL BRACKET SYNTAX: Change df'Col1', 'Col2' to df[['Col1', 'Col2']]
-#     # This specifically targets the comma-separated strings outside of actual list brackets.
-#     code = re.sub(r"df\s*['\"]([^'\"]+)['\"]\s*,\s*['\"]([^'\"]+)['\"]", r"df[['\1', '\2']]", code)
-
-#     # 3. FIX MISSING BRACKETS: Change dfnumeric_columns to df[numeric_columns]
-#     code = re.sub(r"df([a-zA-Z_][a-zA-Z0-9_]*)", r"df[\1]", code)
-
-#     # Cut off at any ReAct format keyword that appears
-#     react_keywords = ['Thought:', 'Action:', 'Observation:', 'Action Input:', 'Final Answer:']
-#     for keyword in react_keywords:
-#         if keyword in code:
-#             code = code.split(keyword)[0]
-    
-#     lines = code.split('\n')
-#     cleaned = []
-    
-#     for line in lines:
-#         stripped = line.strip()
-#         if not stripped:
-#             cleaned.append(line)
-#             continue
-        
-#         # Skip markdown code blocks
-#         if stripped.startswith('```'):
-#             continue
-        
-#         # Skip natural language phrases Mistral loves to include
-#         lower_line = stripped.lower()
-#         if any(phrase in lower_line for phrase in [
-#             'please wait', 'i\'ll', 'i will', 'here\'s', 'here is', 'now i', 'let me',
-#             'as you can see', 'the code', 'this code', 'executing', 'analyzing',
-#             'calculating', 'note:', 'example:', 'explanation:', 'in this corrected',
-#             'in python', 'should resolve', 'this should', 'will help'
-#         ]):
-#             continue
-        
-#         cleaned.append(line)
-    
-#     result = '\n'.join(cleaned).strip()
-#     return result if len(result) >= 3 else code
-
-# def _clean_code(code: str) -> str:
-#     # 1. REMOVE NESTED TOOL CALLS (Mistral's biggest loop issue)
-#     # Fixes: result = execute_pandas_code("result = df.corr()") -> result = df.corr()
-#     code = re.sub(r"execute_pandas_code\s*\(\s*['\"]+(.*?)['\"]+\s*\)", r"\1", code, flags=re.DOTALL)
-    
-#     # 2. FIX SELECT_DTYPES SYNTAX (Mistral's current crash)
-#     # Fixes: include='int64', 'float64' -> include=['int64', 'float64']
-#     code = re.sub(r"include\s*=\s*['\"]([^'\"]+)['\"]\s*,\s*['\"]([^'\"]+)['\"]", r"include=['\1', '\2']", code)
-
-#     # 3. FIX BRACKET HALLUCINATIONS
-#     # Fixes: df'Phone 1', 'Phone 2' -> df[['Phone 1', 'Phone 2']]
-#     code = re.sub(r"df\s*['\"]([^'\"]+)['\"]\s*,\s*['\"]([^'\"]+)['\"]", r"df[['\1', '\2']]", code)
-    
-#     # 4. FIX CONCATENATED VARIABLE NAMES
-#     # Fixes: dfnumeric_columns -> df[numeric_columns]
-#     # We only apply this if it's not already bracketed
-#     code = re.sub(r"df(?![\[])([a-zA-Z_][a-zA-Z0-9_]*)", r"df[\1]", code)
-
-#     # Standard cleaning (same as your current script)
-#     react_keywords = ['Thought:', 'Action:', 'Observation:', 'Action Input:', 'Final Answer:']
-#     for keyword in react_keywords:
-#         if keyword in code:
-#             code = code.split(keyword)[0]
-            
-#     lines = code.split('\n')
-#     cleaned = [line for line in lines if not any(phrase in line.lower() for phrase in ['i will', 'here is', 'corrected code', '```'])]
-    
-#     return '\n'.join(cleaned).strip()
-
 def _clean_code(code: str) -> str:
     lines = code.split('\n')
     cleaned = []
@@ -180,7 +103,8 @@ def validate_pandas_code(code: str) -> bool:
     """Validate that code is safe to execute"""
     dangerous_keywords = [
         'import os', 'import sys', 'import subprocess', '__import__',
-        'eval', 'exec', 'compile', 'open(', 'file(', 'input('
+        'eval', 'exec', 'compile', 'open(', 'file(', 'input(',
+        'matplotlib', 'pyplot', 'plt.', '.show(', '.plot('
     ]
     
     code_lower = code.lower()

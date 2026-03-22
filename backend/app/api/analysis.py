@@ -8,7 +8,7 @@ from starlette.concurrency import run_in_threadpool
 from app.core.database import get_db
 from app.models.models import UploadedFile, AnalysisResult
 from app.schemas.schemas import AnalysisRequest, AnalysisResponse
-from app.agents.data_analyst_v2 import DataAnalystAgent
+from app.agents.data_analyst_v3 import DataAnalystAgent
 
 router = APIRouter()
 

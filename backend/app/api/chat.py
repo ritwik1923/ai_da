@@ -1,14 +1,15 @@
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.orm import Session
 import pandas as pd
-import uuid
+import uuid, json
 from datetime import datetime
 from starlette.concurrency import run_in_threadpool
 
 from app.core.database import get_db
 from app.models.models import Conversation, Message, UploadedFile
 from app.schemas.schemas import ChatRequest, ChatResponse, ConversationHistory, ChatMessage
-from app.agents.data_analyst_v2 import DataAnalystAgent
+# from app.agents.data_analyst_v2 import DataAnalystAgent
+from app.agents.data_analyst_v3 import build_data_analyst_agent as DataAnalystAgent
 
 router = APIRouter()
 
@@ -20,8 +21,8 @@ def _load_dataframe(file_type: str, file_path: str) -> pd.DataFrame:
 
 
 def _run_agent_analysis(df: pd.DataFrame, conversation_memory: list, query: str):
-    agent = DataAnalystAgent(df, conversation_memory)
-    return agent.analyze(query)
+    agent = DataAnalystAgent(df, conversation_memory,query)
+    return agent.analyze()
 
 
 @router.post("/message", response_model=ChatResponse)
@@ -91,7 +92,12 @@ async def send_message(
             conversation_memory,
             request.message,
         )
-        
+        # 1. SAFETY CHECK: Catch the None object before it crashes the DB insertion
+        if result is None:
+            raise ValueError("The Agent returned a None object. Check your data_analyst_v3.py script and ensure all paths (especially recursive retries) have a 'return' statement.")
+
+        # 2. PRINT FIX: Use json.dumps with default=str to handle any datetime/custom objects safely
+        print(f"\n\nAgent Result: {json.dumps(result, default=str)}")
         # Save assistant response
         assistant_message = Message(
             conversation_id=conversation.id,
@@ -105,8 +111,7 @@ async def send_message(
         
         return ChatResponse(
             session_id=request.session_id,
-            response=result["answer"],
-            generated_code=result.get("generated_code"),
+            response=result.get("answer") or "Failed to Answer. Please retry again.",            generated_code=result.get("generated_code"),
             execution_result=result.get("execution_result"),
             chart_data=result.get("chart_data"),
             timestamp=datetime.utcnow()

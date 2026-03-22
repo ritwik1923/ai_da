@@ -1,7 +1,8 @@
 import pandas as pd
 import time
 import matplotlib.pyplot as plt
-import os
+import os, sys
+import plotly.express as px
 # Importing from 'app' directly as it is a top-level directory in your backend
 # from app.agents.data_analyst_v2 import DataAnalystAgent
 # from app.models.models import AnalysisResult
@@ -11,22 +12,9 @@ import os
 file_path = os.path.expanduser("~/Downloads/products-100.csv")
 df = pd.read_csv(file_path)
 # query = "What is the average price of products?"
-
-# print(f"Loaded dataframe with {len(df.columns)} columns")
-# agent = DataAnalystAgent(df=df)
-# result = df[(df['Price'] > 200) & (df['Stock'] < 20)][['Name', 'Price', 'Stock']]
-# result = df.groupby('Category')['Stock'].sum().nlargest(3)
-result = df['Price'].corr(df['Stock'])
-print(result)
-result = df[['Category', 'Stock']].groupby('Category').sum().reset_index()
-result.columns = ['Category', 'Sum of Stock']
-
-
-plt.bar(result['Category'], result['Sum of Stock'])
-plt.xlabel('Category')
-plt.ylabel('Sum of Stock')
-plt.title('Sum of Stock by Category')
-plt.show()
+result = df.groupby('Availability')['Price'].mean().reset_index()
+fig = px.line(result, x='Availability', y='Price', title='Average Price by Availability Status')
+fig.show()
 # # Added 'query' as a parameter to match your function call
 # def test_agent_analysis(query):
 #     start_time = time.time()

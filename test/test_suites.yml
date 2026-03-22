@@ -1,9 +1,9 @@
 test_cases:
   # Level 1: Basic Retrieval & Distribution
-  # - id: 1
-  #   query: "What is the exact median price of all products in the dataset?"
-  #   expected_snippet: ".median()"
-  #   expected_val: "407.5"
+  - id: 1
+    query: "What is the exact median price of all products in the dataset?"
+    expected_snippet: ".median()"
+    expected_val: "407.5"
   # - id: 1.1
   #   query: "What is the exact median price of all products in the dataset?"
   #   expected_snippet: ".median()"
@@ -108,10 +108,10 @@ test_cases:
   #   expected_val: "Zimmerman, Barr and Davis"
 
   # # # Level 5: Chart Generation & Visualization
-  - id: 21
-    query: "Generate a bar chart showing the total stock for each product category."
-    expected_snippet: "generate_chart"
-    expected_val: "Bar Chart with Categories on X-axis and Total Stock on Y-axis" 
+  # - id: 21
+  #   query: "Generate a bar chart showing the total stock for each product category."
+  #   expected_snippet: "generate_chart"
+  #   expected_val: "Bar Chart with Categories on X-axis and Total Stock on Y-axis" 
   # - id: 22
   #   query: "Create a line chart that displays the average price of products over time, grouped by their availability status."
   #   expected_snippet: "generate_chart"
@@ -169,14 +169,8 @@ test_cases:
   #   query: "Produce a count plot for the top 5 most common product Colors."
   #   expected_snippet: "generate_chart"
   #   expected_val: "Bar chart showing the frequency of the top 5 values in the 'Color' column, sorted by count."
-# Test ID,User Prompt (Natural Language),Intended Chart Type,Expected Data Logic
-# TC-01,"""Show me a bar chart of how many products are in each category.""",Bar Chart,Count occurrences of each unique value in the Category column.
-# TC-02,"""What is the distribution of product prices? Use a histogram.""",Histogram,Bin the Price column values and show frequency.
-# TC-03,"""Create a pie chart showing the proportion of different availability statuses.""",Pie Chart,"Calculate the percentage share of each value in the Availability column (e.g., in_stock, pre_order)."
-# TC-04,"""Plot the relationship between Price and Stock levels.""",Scatter Plot,Use Price on the X-axis and Stock on the Y-axis to show correlation.
-# TC-05,"""Give me a horizontal bar chart of the top 10 most expensive products.""",Horizontal Bar Chart,"Sort by Price (descending), take top 10, use Name as labels."
-# TC-06,"""Compare the average price of products across all categories.""",Bar Chart,"Group by Category, calculate the mean of Price, and plot."
-# TC-07,"""Show the total stock availability grouped by Brand for the top 5 brands.""",Bar Chart,"Group by Brand, sum the Stock, sort descending, and take the top 5."
-# TC-08,"""Visualize the variety of colors available using a count plot.""",Bar Chart (Count),Count the frequency of each unique value in the Color column.
-# TC-09,"""Create a box plot to show the price distribution across different Categories.""",Box Plot,"Group Price data by Category to show median, quartiles, and outliers."
-# TC-10,"""Show a stacked bar chart of Availability status broken down by Category.""",Stacked Bar Chart,"Pivot data on Category and Availability, counting occurrences for each segment."
+
+  # - id: 34
+  #   query: "for cooler fan compare the sale betn Q1 & Q2"
+  #   expected_snippet: "generate_chart"
+  #   expected_val: "Bar chart showing the frequency of the top 5 values in the 'Color' column, sorted by count."

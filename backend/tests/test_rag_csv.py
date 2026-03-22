@@ -20,7 +20,7 @@ from backend.app.agents.data_analyst_v2 import DataAnalystAgent
 # (chroma, sentence_transformers) are missing.  the agent itself will import
 # them lazily during initialization, but we want to detect the absence early.
 try:
-    from app.utils.column_vector_store import ColumnSelector  # noqa: F401
+    from backend.app.agents.utility.column_vector_store import ColumnSelector  # noqa: F401
 except ImportError:
     ColumnSelector = None
 

@@ -32,18 +32,18 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
             <ReactMarkdown>{message.content}</ReactMarkdown>
           </div>
           
-          {/* Generated Code */}
-          {message.generated_code && !isUser && (
-            <details className="mt-3 bg-gray-50 rounded-lg overflow-hidden">
-              <summary className="cursor-pointer px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100 flex items-center gap-2">
-                <Code className="w-4 h-4" />
-                View Generated Code
-              </summary>
-              <pre className="p-3 text-xs overflow-x-auto bg-gray-900 text-gray-100">
-                <code>{message.generated_code}</code>
-              </pre>
-            </details>
-          )}
+        {/* Generated Code - Direct View */}
+        {message.generated_code && !isUser && (
+          <div className="mt-3 bg-gray-900 rounded-lg overflow-hidden">
+            <div className="px-3 py-2 text-xs font-medium text-gray-400 border-b border-gray-800 flex items-center gap-2">
+              <Code className="w-4 h-4" />
+              Generated Code
+            </div>
+            <pre className="p-3 text-xs overflow-x-auto text-gray-100">
+              <code>{message.generated_code}</code>
+            </pre>
+          </div>
+        )}
           
           {/* Chart */}
           {message.chart_data && !isUser && (

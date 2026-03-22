@@ -13,7 +13,7 @@ JSON_FILE = "test_suites.json"
 YML_FILE = "test_suites.yml"
 MAX_RETRIES = 2
 LOG_DIR = "logs"
-MAX_FAILED_ALLOWED = 5
+MAX_FAILED_ALLOWED = 2
 
 # Logger Setup (As defined previously)
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -115,6 +115,8 @@ def run_automated_suite():
 
     logger.info(f"\nFINISH: Passed {stats['passed']} | Failed {stats['failed']}")
     logger.info(f"\n\nFailed Cases: {[case['id'] for case in list_faided_cases]}")
+
+
 if __name__ == "__main__":
     start_time = time.time()
     run_automated_suite()
