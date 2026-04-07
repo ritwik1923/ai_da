@@ -20,7 +20,7 @@ import sys, re
 from app.core.config import settings
 from app.utils.code_executor import safe_execute_pandas_code
 from app.utils.chart_generator import generate_chart
-from app.utils.custom_llm import OllamaLocalLLM
+from backend.app.agents.utility.custom_llm import OllamaLocalLLM
 from app.utils.data_passport import generate_data_passport
 from app.utils.self_healing_executor import SelfHealingExecutor
 

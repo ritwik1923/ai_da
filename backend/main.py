@@ -13,7 +13,7 @@ from app.models import models
 from app.api import chat, files, analysis
 
 # 1. FIX: Import AgentGlobals from your v3 agent file
-from app.agents.data_analyst_v3 import AgentGlobals
+# from backend.app.agents.extra.data_analyst_v3 import AgentGlobals
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +41,8 @@ async def initialize_database() -> None:
     try:
         # This will load your LLMs and build the FAISS index in memory
         AgentGlobals.initialize()
+        app.state.code_learning = AgentGlobals.learn_code_4r_feedback
+        app.state.react_learning = AgentGlobals.learn_react_4r_feedback
         app.state.vector_database_connection = True
         logger.info("✅ AI Globals and Vector DB initialized successfully.")
     except Exception as e:

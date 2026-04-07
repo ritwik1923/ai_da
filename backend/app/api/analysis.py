@@ -8,7 +8,7 @@ from starlette.concurrency import run_in_threadpool
 from app.core.database import get_db
 from app.models.models import UploadedFile, AnalysisResult
 from app.schemas.schemas import AnalysisRequest, AnalysisResponse
-from app.agents.data_analyst_v3 import DataAnalystAgent
+# from backend.app.agents.extra.data_analyst_v3 import DataAnalystAgent
 
 router = APIRouter()
 
@@ -19,9 +19,9 @@ def _load_dataframe(file_type: str, file_path: str) -> pd.DataFrame:
     return pd.read_excel(file_path)
 
 
-def _run_agent_analysis(df: pd.DataFrame, query: str):
-    agent = DataAnalystAgent(df)
-    return agent.analyze(query)
+# def _run_agent_analysis(df: pd.DataFrame, query: str):
+#     agent = DataAnalystAgent(df)
+#     return agent.analyze(query)
 
 
 @router.post("/analyze", response_model=AnalysisResponse)

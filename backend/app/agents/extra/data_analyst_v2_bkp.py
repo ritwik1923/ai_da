@@ -18,7 +18,7 @@ import sys, re
 from app.core.config import settings
 from app.utils.code_executor import safe_execute_pandas_code
 from app.utils.chart_generator import generate_chart
-from app.utils.custom_llm import CompanyGenAILLM, OllamaLocalLLM
+from backend.app.agents.utility.custom_llm import CompanyGenAILLM, OllamaLocalLLM
 from app.utils.data_passport import generate_data_passport, DataPassport
 from backend.app.agents.utility.column_vector_store import ColumnVectorStore, ColumnSelector
 from app.utils.self_healing_executor import SelfHealingExecutor

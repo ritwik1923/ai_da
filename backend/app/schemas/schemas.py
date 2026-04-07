@@ -37,6 +37,7 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     """Response schema for chat"""
     session_id: str
+    message_id: int
     response: str
     generated_code: Optional[str] = None
     execution_result: Optional[Dict[str, Any]] = None
@@ -75,3 +76,8 @@ class ErrorResponse(BaseModel):
     error: str
     detail: Optional[str] = None
     code: Optional[str] = None
+
+class FeedbackRequest(BaseModel):
+    message_id: int # The ID of the assistant's message
+    is_positive: bool # True for 👍, False for 👎
+    comments: Optional[str] = None
