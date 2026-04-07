@@ -1,0 +1,1319 @@
+--- File: backend/app/agents/data_analyst_v3.py ---
+import pandas as pd
+import os
+import sys
+from langchain_classic.agents import AgentExecutor, create_react_agent
+from langchain_classic.prompts import PromptTemplate
+from langchain_community.embeddings import OllamaEmbeddings
+
+BACKEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+if BACKEND_DIR not in sys.path:
+    sys.path.insert(0, BACKEND_DIR)
+
+# Importing your newly refactored classes
+try:
+    from .utility.AnalysisToolFactory import AnalysisToolFactory
+    from .utility.DataAnalystAgent import DataAnalystAgent
+    from .utility.FewShotExampleStore import Code_FewShotExampleStore, ReAct_FewShotExampleStore
+    from .utility.CodeGenerationService import CodeGenerationService
+except ImportError:  # pragma: no cover
+    try:
+        from utility.AnalysisToolFactory import AnalysisToolFactory
+        from utility.DataAnalystAgent import DataAnalystAgent
+        from utility.FewShotExampleStore import Code_FewShotExampleStore, ReAct_FewShotExampleStore
+        from utility.CodeGenerationService import CodeGenerationService
+    except ImportError:
+        from app.agents.utility.AnalysisToolFactory import AnalysisToolFactory
+        from app.agents.utility.DataAnalystAgent import DataAnalystAgent
+        from app.agents.utility.FewShotExampleStore import Code_FewShotExampleStore, ReAct_FewShotExampleStore
+        from app.agents.utility.CodeGenerationService import CodeGenerationService
+
+
+# Importing your existing utilities
+try:
+    from ..utils.custom_llm import OllamaLocalLLM
+    from ..utils.self_healing_executor import SelfHealingExecutor
+    from ..utils.data_passport import generate_data_passport
+except ImportError:  # pragma: no cover
+    try:
+        from app.utils.custom_llm import OllamaLocalLLM
+        from app.utils.self_healing_executor import SelfHealingExecutor
+        from app.utils.data_passport import generate_data_passport
+    except ImportError:
+        app_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        if app_dir not in sys.path:
+            sys.path.insert(0, app_dir)
+        from utils.custom_llm import OllamaLocalLLM
+        from utils.self_healing_executor import SelfHealingExecutor
+        from utils.data_passport import generate_data_passport
+        
+from app.utils.logger import get_production_logger
+        
+logger = get_production_logger("ai_da.globals")
+class AgentGlobals:
+    """
+    Holds heavy, dataset-independent components in memory.
+    These are initialized ONCE when the backend server starts.
+    """
+    _initialized = False
+    reasoning_llm = None
+    coding_llm = None
+    example_store = None
+    react_example_store = None
+
+    @classmethod
+    def initialize(cls):
+        if cls._initialized:
+            return
+            
+        print("🚀 [Startup] Initializing Global LLMs and Vector DB...")
+        
+        # 1. Load LLMs
+        cls.reasoning_llm = OllamaLocalLLM(model="llama3.1:8b", temperature=0.0)
+        cls.coding_llm = OllamaLocalLLM(model="deepseek-coder-v2:16b", temperature=0.0)
+        # 2. Initialize Vector DBs using our clean subclasses
+        embeddings_model = OllamaEmbeddings(model="llama3.1:8b")
+
+        # 3. Initialize Vector DBs using the Embeddings Model
+        cls.example_store = Code_FewShotExampleStore(embeddings_model=embeddings_model)
+        cls.react_example_store = ReAct_FewShotExampleStore(embeddings_model=embeddings_model)
+        
+        cls._initialized = True
+        print("✅ [Startup] Global AI Resources Ready.")
+    @classmethod
+    def learn_react_4r_feedback(cls,task,return_code):
+        # Send it to the Vector DB to learn permanently
+        AgentGlobals.react_example_store.learn_new_example(
+            task_description=task,
+            successful_code=return_code
+        )
+    @classmethod
+    def learn_code_4r_feedback(cls,task,return_code):
+        # Send it to the Vector DB to learn permanently
+        AgentGlobals.example_store.learn_new_example(
+            task_description=task,
+            successful_code=return_code
+        )
+
+
+# ==========================================
+# 2. PER-REQUEST AGENT BUILDER
+# ==========================================
+def build_data_analyst_agent(df: pd.DataFrame, conversation_memory: list = None, current_query: str = "") -> DataAnalystAgent:
+    """
+    Factory function to assemble the EnhancedDataAnalystAgent.
+    Now super fast because it reuses the global LLMs and Vector DB!
+    """
+    conversation_memory = conversation_memory or []
+
+    # 1. Grab Global Dependencies (Instant)
+    reasoning_llm = AgentGlobals.reasoning_llm
+    coding_llm = AgentGlobals.coding_llm
+    example_store = AgentGlobals.example_store
+    react_examples_context = AgentGlobals.react_example_store
+
+    # 2. Generate Request-Specific Data Context
+    print(f"Generating data passport for {len(df)} rows × {len(df.columns)} columns...")
+    data_passport = generate_data_passport(df, max_sample_rows=3)
+
+    # 3. Initialize Request-Specific Execution Engine
+    executor = SelfHealingExecutor(df=df, max_retries=3)
+
+    # 4. Wire up the Code Generation Service
+    code_service = CodeGenerationService(
+        coding_llm=coding_llm,
+        example_store=example_store,
+        df=df,
+        executor=executor
+    )
+
+    # 5. Create Request-Specific LangChain Tools
+    tool_factory = AnalysisToolFactory(
+        data_passport=data_passport,
+        code_service=code_service,
+        df=df
+    )
+    tools = tool_factory.create_tools()
+    # 1. Fetch dynamic ReAct examples based on what the user just asked!
+    react_examples_context = AgentGlobals.react_example_store.get_context_string(current_query, k=1)
+    # 6. Build the ReAct Agent Prompt (Depends on current df and chat history)
+    schema_context = data_passport.to_prompt_context()
+    history_text = "".join([f"{msg['role']}: {msg['content']}\n" for msg in conversation_memory])
+    
+    # prompt = PromptTemplate(
+    #     template="""You are a Data Analyst Manager... 
+    #     Context: {schema_context}
+    #     History: {history_text}
+    #     Tools: {tool_names} {tools}
+    #     Question: {input}
+        
+    #     ### EXAMPLES OF CORRECT FORMATTING ###
+    # Mimic this exact formatting for your response:
+    # {react_examples_context}
+    # ######################################
+        
+    # ## Rules:
+    # 1. Review the Schema and Previous Conversation. 
+    # 2. If the data needed is missing, DO NOT use a tool. Proceed directly to Final Answer.
+    # 3. If the data exists and you need to perform an analysis, call a tool.
+    # 4. ALWAYS use get_dataframe_schema first if you need to check available columns.
+
+
+    # ## STRICT FORMATTING RULES (CRITICAL):
+    # You must choose EXACTLY ONE of the following options. 
+
+    # OPTION 1: Use a Tool (Do NOT include Final Answer)
+    # Thought: [your reasoning]
+    # Action: [MUST be EXACTLY one of: {tool_names}]
+    
+
+    # OR
+
+    # OPTION 2: Give the Final Answer (Do NOT include Action)
+    # Thought: I already know the answer.
+    # Final Answer: [Your exact answer]
+
+    #     {agent_scratchpad}""",
+    #     input_variables=["input", "tools", "tool_names", "agent_scratchpad"],
+    #     partial_variables={
+    #         "schema_context": schema_context, 
+    #         "history_text": history_text,
+    #         "react_examples_context": react_examples_context
+    #     }
+    # )
+    prompt = PromptTemplate(
+        template="""You are a strict Data Analyst Manager.
+        Context: {schema_context}
+        History: {history_text}
+        Tools: {tool_names} {tools}
+        
+    ### EXAMPLES OF CORRECT FORMATTING ###
+    Mimic this exact Thought/Action/Observation formatting:
+    {react_examples_context}
+    ######################################
+        
+    ## Rules:
+    1. If you call a tool, you will receive an 'Observation'.
+    2. Use that 'Observation' IMMEDIATELY to provide your 'Final Answer'.
+    3. DO NOT start a new analysis or ask new questions.
+    4. Review the Schema and Previous Conversation. 
+    5. If you need to perform an analysis, use a tool.
+    6. You run in a loop. After you output an Action, the system will execute it and return an "Observation:". 
+    7. Once you see the "Observation:", you MUST proceed to OPTION 2 and give the Final Answer.
+
+    ## STRICT FORMATTING RULES (CRITICAL):
+    You must choose EXACTLY ONE of the following options per response. 
+    DO NOT USE MARKDOWN. NEVER use `##`, `**`, or bold text for the keywords. They must be exactly "Thought:", "Action:", "Action Input:", and "Final Answer:".
+
+    OPTION 1: Use a Tool (Do NOT include Final Answer)
+    Thought: [your reasoning]
+    Action: [MUST be EXACTLY one of: {tool_names}]
+    Action Input: [Provide the tool input]
+
+    OR
+
+    OPTION 2: Give the Final Answer (Do NOT include Action)
+    Thought: Based on the observation, I now know the answer.
+    Final Answer: [Your exact answer]
+
+    ---
+    Question: {input}
+    {agent_scratchpad}""",
+        input_variables=["input", "tools", "tool_names", "agent_scratchpad"],
+        partial_variables={
+            "schema_context": schema_context, 
+            "history_text": history_text,
+            "react_examples_context": react_examples_context
+        }
+    )
+    def _handle_parsing_error(error: Exception) -> str:
+        error_str = str(error)
+        
+        # If the LLM tried to do an Action and a Final Answer at the same time
+        if "both a final answer and a parse-able action" in error_str:
+            return (
+                "FORMATTING ERROR: You provided BOTH an Action and a Final Answer. "
+                "You must choose ONLY ONE. If you have the answer, use 'Thought:' followed by 'Final Answer:'."
+            )
+            
+        # Standard strict formatting reminder
+        return (
+            "CRITICAL FORMATTING ERROR. LangChain could not parse your response. "
+            "1. Remove ALL markdown headers (like ##) and bolding (**). "
+            "2. Ensure your keywords are exactly 'Thought:', 'Action:', 'Action Input:', or 'Final Answer:'.\n"
+            "Please try again using the exact unformatted keywords."
+        )
+    
+    # 7. Assemble the Agent
+    langchain_agent = create_react_agent(reasoning_llm, tools, prompt)
+    agent_executor = AgentExecutor(
+        agent=langchain_agent,
+        tools=tools,
+        verbose=True, 
+        max_iterations=4,
+        handle_parsing_errors=_handle_parsing_error,
+        return_intermediate_steps=True
+    )
+    
+    # 8. Return the Final Facade
+    return DataAnalystAgent(
+        df=df,
+        query=current_query,
+        reasoning_llm=reasoning_llm,
+        agent_executor=agent_executor,
+        code_service=code_service
+    )
+    
+-e 
+
+
+--- File: backend/app/api/__init__.py ---
+# API routes module
+-e 
+
+
+--- File: backend/app/api/analysis.py ---
+from fastapi import APIRouter, HTTPException, Depends
+from sqlalchemy.orm import Session
+import pandas as pd
+from datetime import datetime
+import time
+from starlette.concurrency import run_in_threadpool
+
+from app.core.database import get_db
+from app.models.models import UploadedFile, AnalysisResult
+from app.schemas.schemas import AnalysisRequest, AnalysisResponse
+from app.agents.data_analyst_v3 import DataAnalystAgent
+
+router = APIRouter()
+
+
+def _load_dataframe(file_type: str, file_path: str) -> pd.DataFrame:
+    if file_type == '.csv':
+        return pd.read_csv(file_path)
+    return pd.read_excel(file_path)
+
+
+def _run_agent_analysis(df: pd.DataFrame, query: str):
+    agent = DataAnalystAgent(df)
+    return agent.analyze(query)
+
+
+@router.post("/analyze", response_model=AnalysisResponse)
+async def analyze_data(
+    request: AnalysisRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Analyze data with a single query (no conversation memory)
+    """
+    
+    # Get file
+    file = db.query(UploadedFile).filter(UploadedFile.id == request.file_id).first()
+    if not file:
+        raise HTTPException(status_code=404, detail="File not found")
+    
+    try:
+        df = await run_in_threadpool(_load_dataframe, file.file_type, file.file_path)
+        
+        # Measure execution time
+        start_time = time.time()
+        
+        result = await run_in_threadpool(_run_agent_analysis, df, request.query)
+        
+        execution_time = int((time.time() - start_time) * 1000)  # milliseconds
+        
+        # Save analysis result
+        analysis = AnalysisResult(
+            file_id=request.file_id,
+            query=request.query,
+            generated_code=result.get("generated_code", ""),
+            result_data=result.get("execution_result"),
+            chart_config=result.get("chart_data"),
+            execution_time=execution_time
+        )
+        db.add(analysis)
+        db.commit()
+        
+        return AnalysisResponse(
+            query=request.query,
+            answer=result["answer"],
+            generated_code=result.get("generated_code", ""),
+            result_data=result.get("execution_result"),
+            chart_data=result.get("chart_data"),
+            execution_time=execution_time
+        )
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
+
+
+@router.get("/history/{file_id}")
+async def get_analysis_history(
+    file_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    Get analysis history for a file
+    """
+    results = db.query(AnalysisResult).filter(
+        AnalysisResult.file_id == file_id
+    ).order_by(AnalysisResult.created_at.desc()).all()
+    
+    return results
+-e 
+
+
+--- File: backend/app/api/chat.py ---
+from fastapi import APIRouter, HTTPException, Depends, Request
+from sqlalchemy.orm import Session
+import pandas as pd
+import uuid, json
+from datetime import datetime
+from starlette.concurrency import run_in_threadpool
+
+from app.core.database import get_db
+from app.models.models import Conversation, Message, UploadedFile
+from app.schemas.schemas import ChatRequest, ChatResponse, ConversationHistory, ChatMessage, FeedbackRequest
+# from app.agents.data_analyst_v2 import DataAnalystAgent
+from app.agents.data_analyst_v3 import build_data_analyst_agent as DataAnalystAgent
+from app.agents.data_analyst_v3 import AgentGlobals
+
+router = APIRouter()
+
+
+def _load_dataframe(file_type: str, file_path: str) -> pd.DataFrame:
+    if file_type == '.csv':
+        return pd.read_csv(file_path)
+    return pd.read_excel(file_path)
+
+
+def _run_agent_analysis(df: pd.DataFrame, conversation_memory: list, query: str):
+    agent = DataAnalystAgent(df, conversation_memory,query)
+    return agent.analyze()
+
+
+@router.post("/message", response_model=ChatResponse)
+async def send_message(
+    request: ChatRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Send a message and get AI response
+    """
+    
+    # Get or create conversation
+    conversation = db.query(Conversation).filter(
+        Conversation.session_id == request.session_id
+    ).first()
+    
+    if not conversation:
+        conversation = Conversation(
+            session_id=request.session_id,
+            file_id=request.file_id
+        )
+        db.add(conversation)
+        db.commit()
+        db.refresh(conversation)
+    
+    # Save user message
+    user_message = Message(
+        conversation_id=conversation.id,
+        role="user",
+        content=request.message
+    )
+    db.add(user_message)
+    db.commit()
+    
+    try:
+        # Load file data if file_id is provided
+        df = None
+        if request.file_id or conversation.file_id:
+            file_id = request.file_id or conversation.file_id
+            file = db.query(UploadedFile).filter(UploadedFile.id == file_id).first()
+            
+            if not file:
+                raise HTTPException(status_code=404, detail="File not found")
+            
+            df = await run_in_threadpool(_load_dataframe, file.file_type, file.file_path)
+        
+        if df is None:
+            raise HTTPException(
+                status_code=400,
+                detail="No data file associated with this conversation. Please upload a file first."
+            )
+        
+        # Get conversation history for memory
+        previous_messages = db.query(Message).filter(
+            Message.conversation_id == conversation.id
+        ).order_by(Message.timestamp).all()
+        
+        conversation_memory = [
+            {"role": msg.role, "content": msg.content}
+            for msg in previous_messages[:-1]  # Exclude the current message
+        ]
+        # TODO remove this memory limit after we have better handling in the agent
+        # conversation_memory = []
+        result = await DataAnalystAgent(df, conversation_memory,request.message).analyze()
+        # await run_in_threadpool(
+        #     _run_agent_analysis,
+        #     df,
+        #     conversation_memory,
+        #     request.message,
+        # )
+        # 1. SAFETY CHECK: Catch the None object before it crashes the DB insertion
+        if result is None:
+            raise ValueError("The Agent returned a None object. Check your data_analyst_v3.py script and ensure all paths (especially recursive retries) have a 'return' statement.")
+
+        # 2. PRINT FIX: Use json.dumps with default=str to handle any datetime/custom objects safely
+        print(f"\n\nAgent Result: {json.dumps(result, default=str)}")
+        # Save assistant response
+        assistant_message = Message(
+            conversation_id=conversation.id,
+            role="assistant",
+            content=result["answer"],
+            generated_code=result.get("generated_code"),
+            chart_data=result.get("chart_data")
+        )
+        db.add(assistant_message)
+        db.commit()
+        
+        return ChatResponse(
+            session_id=request.session_id,
+            message_id=assistant_message.id,
+            response=result.get("answer") or "Failed to Answer. Please retry again.",            generated_code=result.get("generated_code"),
+            execution_result=result.get("execution_result"),
+            chart_data=result.get("chart_data"),
+            timestamp=datetime.utcnow()
+        )
+        
+    except Exception as e:
+        # Save error message
+        error_message = Message(
+            conversation_id=conversation.id,
+            role="assistant",
+            content=f"I encountered an error: {str(e)}"
+        )
+        db.add(error_message)
+        db.commit()
+        print(f"Error processing message: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/history/{session_id}", response_model=ConversationHistory)
+async def get_conversation_history(
+    session_id: str,
+    db: Session = Depends(get_db)
+):
+    """
+    Get conversation history for a session
+    """
+    conversation = db.query(Conversation).filter(
+        Conversation.session_id == session_id
+    ).first()
+    
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    
+    messages = db.query(Message).filter(
+        Message.conversation_id == conversation.id
+    ).order_by(Message.timestamp).all()
+    
+    chat_messages = [
+        ChatMessage(
+            role=msg.role,
+            content=msg.content,
+            timestamp=msg.timestamp,
+            generated_code=msg.generated_code,
+            chart_data=msg.chart_data
+        )
+        for msg in messages
+    ]
+    
+    # Get file info if available
+    file_info = None
+    if conversation.file_id:
+        file = db.query(UploadedFile).filter(
+            UploadedFile.id == conversation.file_id
+        ).first()
+        if file:
+            file_info = {
+                "id": file.id,
+                "filename": file.original_filename,
+                "row_count": file.row_count,
+                "columns": [col["name"] for col in file.columns]
+            }
+    
+    return ConversationHistory(
+        session_id=session_id,
+        messages=chat_messages,
+        file_info=file_info
+    )
+
+
+@router.post("/new-session")
+async def create_new_session():
+    """
+    Create a new conversation session
+    """
+    session_id = str(uuid.uuid4())
+    return {"session_id": session_id}
+
+
+@router.delete("/session/{session_id}")
+async def delete_session(session_id: str, db: Session = Depends(get_db)):
+    """
+    Delete a conversation session
+    """
+    conversation = db.query(Conversation).filter(
+        Conversation.session_id == session_id
+    ).first()
+    
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    
+    db.delete(conversation)
+    db.commit()
+    
+    return {"message": "Conversation deleted successfully"}
+
+
+@router.post("/feedback")
+async def submit_feedback(
+    feedback: FeedbackRequest,
+    request: Request,  
+    db: Session = Depends(get_db)
+):
+    try:
+        assistant_msg = db.query(Message).filter(Message.id == feedback.message_id).first()
+        if not assistant_msg:
+            raise HTTPException(status_code=404, detail="Message not found")
+        
+        if not feedback.is_positive:
+            return
+        
+        user_msg = db.query(Message).filter(
+            Message.conversation_id == assistant_msg.conversation_id,
+            Message.role == "user",
+            Message.timestamp < assistant_msg.timestamp
+        ).order_by(Message.timestamp.desc()).first()
+
+        if not user_msg:
+            return
+        learned_something = False
+
+        # 1. 💻 CODE LEARNING: If it was a chart/analysis that generated code
+        if assistant_msg.generated_code:
+            print("👍 Teaching Code LLM...")
+            request.app.state.code_learning(
+                task=user_msg.content, 
+                return_code=assistant_msg.generated_code
+            )
+            learned_something = True
+
+        # 2. 🧠 REACT LEARNING: If it was a reasoning task and we saved the trajectory
+        if assistant_msg.execution_result and "Thought:" in assistant_msg.execution_result:
+            print("👍 Teaching ReAct LLM formatting...")
+            request.app.state.react_learning(
+                task=user_msg.content, 
+                return_code=assistant_msg.execution_result # This holds our perfect ReAct string
+            )
+            learned_something = True
+
+        if learned_something:
+            return {"status": "success", "message": "Feedback saved. The AI has learned from this interaction!"}
+
+        return {"status": "success", "message": "Feedback recorded."}
+
+    except Exception as e:
+        print(f"Error processing feedback: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))-e 
+
+
+--- File: backend/app/api/files.py ---
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
+from sqlalchemy.orm import Session
+import pandas as pd
+import os
+from pathlib import Path
+from datetime import datetime
+import uuid
+from starlette.concurrency import run_in_threadpool
+
+from app.core.database import get_db
+from app.core.config import settings
+from app.models.models import UploadedFile
+from app.schemas.schemas import FileUploadResponse
+
+router = APIRouter()
+
+
+def _read_dataframe(file_ext: str, file_path: str) -> pd.DataFrame:
+    if file_ext == '.csv':
+        return pd.read_csv(file_path)
+    if file_ext in ['.xlsx', '.xls']:
+        return pd.read_excel(file_path)
+    raise ValueError("Unsupported file format")
+
+# Ensure upload directory exists
+Path(settings.UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
+
+
+@router.post("/upload", response_model=FileUploadResponse)
+async def upload_file(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db)
+):
+    """
+    Upload a CSV or Excel file for analysis
+    """
+    
+    # Validate file extension
+    file_ext = os.path.splitext(file.filename)[1].lower()
+    if file_ext not in settings.ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid file type. Allowed: {', '.join(settings.ALLOWED_EXTENSIONS)}"
+        )
+    
+    # Read file content
+    content = await file.read()
+    
+    # Validate file size
+    if len(content) > settings.MAX_FILE_SIZE:
+        raise HTTPException(
+            status_code=400,
+            detail=f"File too large. Maximum size: {settings.MAX_FILE_SIZE / 1024 / 1024}MB"
+        )
+    
+    # Generate unique filename
+    unique_filename = f"{uuid.uuid4()}{file_ext}"
+    # TODO : save the files in remote storage like S3, GCP, Azure Blob Storage etc.
+    file_path = os.path.join(settings.UPLOAD_DIR, unique_filename)
+    
+    # Save file
+    with open(file_path, "wb") as f:
+        f.write(content)
+    
+    try:
+        df = await run_in_threadpool(_read_dataframe, file_ext, file_path)
+        
+        # Extract metadata
+        columns_info = []
+        for col in df.columns:
+            columns_info.append({
+                "name": col,
+                "dtype": str(df[col].dtype)
+            })
+        
+        # Create database record
+        db_file = UploadedFile(
+            filename=unique_filename,
+            original_filename=file.filename,
+            file_path=file_path,
+            file_size=len(content),
+            file_type=file_ext,
+            columns=columns_info,
+            row_count=len(df)
+        )
+        
+        db.add(db_file)
+        db.commit()
+        db.refresh(db_file)
+        
+        return FileUploadResponse(
+            id=db_file.id,
+            filename=db_file.filename,
+            original_filename=db_file.original_filename,
+            file_size=db_file.file_size,
+            row_count=db_file.row_count,
+            columns=[col["name"] for col in columns_info],
+            upload_date=db_file.upload_date
+        )
+        
+    except Exception as e:
+        # Clean up file if processing failed
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        raise HTTPException(status_code=500, detail=f"Error processing file: {str(e)}")
+
+
+@router.get("/")
+async def list_files(db: Session = Depends(get_db)):
+    """
+    Get list of all uploaded files
+    """
+    files = db.query(UploadedFile).order_by(UploadedFile.upload_date.desc()).all()
+    return files
+
+
+@router.get("/{file_id}")
+async def get_file(file_id: int, db: Session = Depends(get_db)):
+    """
+    Get details of a specific file
+    """
+    file = db.query(UploadedFile).filter(UploadedFile.id == file_id).first()
+    if not file:
+        raise HTTPException(status_code=404, detail="File not found")
+    return file
+
+
+@router.delete("/{file_id}")
+async def delete_file(file_id: int, db: Session = Depends(get_db)):
+    """
+    Delete an uploaded file
+    """
+    file = db.query(UploadedFile).filter(UploadedFile.id == file_id).first()
+    if not file:
+        raise HTTPException(status_code=404, detail="File not found")
+    
+    # Delete physical file
+    if os.path.exists(file.file_path):
+        os.remove(file.file_path)
+    
+    # Delete database record
+    db.delete(file)
+    db.commit()
+    
+    return {"message": "File deleted successfully"}
+
+
+@router.get("/{file_id}/preview")
+async def preview_file(file_id: int, limit: int = 10, db: Session = Depends(get_db)):
+    """
+    Get preview of file data
+    """
+    file = db.query(UploadedFile).filter(UploadedFile.id == file_id).first()
+    if not file:
+        raise HTTPException(status_code=404, detail="File not found")
+    
+    try:
+        # Load data
+        if file.file_type == '.csv':
+            df = pd.read_csv(file.file_path)
+        else:
+            df = pd.read_excel(file.file_path)
+        
+        return {
+            "columns": list(df.columns),
+            "data": df.head(limit).to_dict(orient='records'),
+            "total_rows": len(df)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error reading file: {str(e)}")
+-e 
+
+
+--- File: backend/test/__init__.py ---
+-e 
+
+
+--- File: backend/test/concurr_test.py ---
+import asyncio
+import httpx
+import time
+from backend.app.utils.logger import get_production_logger
+
+logger = get_production_logger("test.concurrency")
+BASE_URL = "http://localhost:8000/api"
+FILE_PATH = "/Users/rwk3030/Downloads/products-100.csv"
+
+async def simulate_user(user_id: int, file_id: str, client: httpx.AsyncClient):
+    """Simulates a single user asking a complex reasoning question."""
+    query = "What is the average price of products containing 'Smart' in their name?"
+    payload = {
+        "session_id": f"stress_test_user_{user_id}",
+        "message": query,
+        "file_id": file_id
+    }
+    
+    start = time.perf_counter()
+    try:
+        # This tests if ainvoke allows other requests to process while Llama is 'thinking'
+        response = await client.post(f"{BASE_URL}/chat/message", json=payload, timeout=120)
+        end = time.perf_counter()
+        
+        if response.status_code == 200:
+            logger.info(f"👤 User {user_id} finished in {end - start:.2f}s")
+        else:
+            logger.error(f"❌ User {user_id} failed with status {response.status_code}")
+    except Exception as e:
+        logger.error(f"🚨 User {user_id} connection error: {e}")
+
+async def run_stress_test(num_users=5):
+    async with httpx.AsyncClient() as client:
+        # 1. Setup: Upload file
+        with open(FILE_PATH, "rb") as f:
+            resp = await client.post(f"{BASE_URL}/files/upload", files={"file": f})
+            file_id = resp.json()["id"]
+
+        logger.info(f"🔥 Starting stress test with {num_users} concurrent users...")
+        
+        # 2. Execution: Launch users simultaneously
+        tasks = [simulate_user(i, file_id, client) for i in range(num_users)]
+        
+        total_start = time.perf_counter()
+        await asyncio.gather(*tasks)
+        total_end = time.perf_counter()
+        
+        logger.info(f"✅ Stress test complete. Total time: {total_end - total_start:.2f}s")
+
+if __name__ == "__main__":
+    asyncio.run(run_stress_test())-e 
+
+
+--- File: backend/test/rwk_test copy.py ---
+# scripts/run_val_suite.py
+import httpx
+import asyncio
+import yaml
+import logging
+from datetime import datetime
+# backend/test/rwk_test.py
+import os
+import sys
+
+# backend/test/rwk_test.py
+import os
+import sys
+
+# 1. Dynamically find the backend root
+# This looks at the current file and goes up one level
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
+
+# 2. Now import using the absolute path from backend root
+try:
+    from app.utils.logger import get_production_logger
+    logger = get_production_logger("ai_da.test_suite")
+except ImportError as e:
+    print(f"❌ Import failed. Ensure 'app' folder is in {BASE_DIR}")
+    print(f"Error: {e}")
+    sys.exit(1)
+
+logger = get_production_logger("ai_da.test_suite")
+# Configuration
+BASE_URL = "http://localhost:8000/api"
+
+# Get the absolute path of the directory containing this script (the 'test' folder)
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Construct the absolute path to the YAML file
+YML_FILE = os.path.join(CURRENT_DIR, "test_suites.yml")
+logger = get_production_logger("ai_da.test_suite")
+
+class AutomatedValidationSuite:
+    def __init__(self):
+        self.stats = {"passed": 0, "failed": 0}
+        self.client = httpx.AsyncClient(timeout=120.0)
+
+    async def upload_file(self, file_path):
+        """Uploads the dataset once and returns file_id."""
+        try:
+            with open(file_path, "rb") as f:
+                files = {"file": f}
+                resp = await self.client.post(f"{BASE_URL}/files/upload", files=files)
+                resp.raise_for_status()
+                return resp.json()["id"]
+        except Exception as e:
+            logger.error("Data upload failed", extra={"error": str(e)})
+            return None
+
+    async def run_case(self, case, file_id):
+        """Runs a single test case with retry logic."""
+        session_id = f"suite_{datetime.now().strftime('%H%M%S')}_{case['id']}"
+        query = case['query']
+        
+        for attempt in range(1, 4):  # Standardized 3 attempts
+            payload = {"session_id": session_id, "message": query, "file_id": file_id}
+            resp = await self.client.post(f"{BASE_URL}/chat/message", json=payload)
+            data = resp.json()
+            
+            answer = str(data.get("response", ""))
+            code = str(data.get("generated_code", ""))
+            msg_id = data.get("message_id")
+
+            # Deep Validation: Check value AND code snippet
+            val_match = case["expected_val"].lower() in answer.lower()
+            code_match = case["expected_snippet"] in code if "expected_snippet" in case else True
+
+            if val_match and code_match:
+                logger.info(f"✅ Case {case['id']} Passed", extra={"attempt": attempt})
+                await self.send_feedback(msg_id, True)
+                return True
+            else:
+                logger.warning(f"⚠️ Case {case['id']} Attempt {attempt} failed")
+                # Update query for self-correction feedback
+                query = f"Previous answer '{answer}' was incorrect. Required value: {case['expected_val']}. Query: {case['query']}"
+        
+        return False
+
+    async def send_feedback(self, message_id, is_positive):
+        """Triggers the learning mechanism in the backend."""
+        if not message_id: return
+        await self.client.post(f"{BASE_URL}/chat/feedback", json={
+            "message_id": message_id,
+            "is_positive": is_positive,
+            "comments": "Automated Suite Learning"
+        })
+
+    async def execute(self, file_path):
+        with open(YML_FILE, 'r') as f:
+            suite = yaml.safe_load(f)
+        
+        file_id = await self.upload_file(file_path)
+        if not file_id: return
+
+        for case in suite['test_cases']:
+            if await self.run_case(case, file_id):
+                self.stats["passed"] += 1
+            else:
+                self.stats["failed"] += 1
+        
+        logger.info("Suite Finished", extra=self.stats)
+        
+if __name__ == "__main__":
+    # Point this to your test dataset
+    FILE_PATH = "/Users/rwk3030/Downloads/products-100.csv"
+    
+    logger.info("🎬 Starting Automated Test Suite...")
+    
+    suite = AutomatedValidationSuite()
+    
+    # Execute the async suite
+    asyncio.run(suite.execute(FILE_PATH))-e 
+
+
+--- File: backend/test/rwk_test.py ---
+import json
+import requests
+import logging
+import os
+import time
+from datetime import datetime
+import yaml
+
+# --- Configuration ---
+BASE_URL = "http://localhost:8000/api"
+FILE_PATH = "/Users/rwk3030/Downloads/products-100.csv"
+JSON_FILE = "test_suites.json"
+# Get the absolute path of the directory containing this script (the 'test' folder)
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Construct the absolute path to the YAML file
+YML_FILE = os.path.join(CURRENT_DIR, "test_suites.yml")
+MAX_RETRIES = 5
+LOG_DIR = "logs"
+MAX_FAILED_ALLOWED = 5
+
+# Logger Setup
+timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+log_filename = os.path.join(LOG_DIR, f"suite_run_{timestamp}.log")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", 
+                    handlers=[logging.FileHandler(log_filename), logging.StreamHandler()])
+logger = logging.getLogger(__name__)
+
+def load_test_cases_json(file_path):
+    """Loads cases from JSON file"""
+    try:
+        with open(file_path, 'r') as f:
+            data = json.load(f)
+            return data.get("test_cases", [])
+    except FileNotFoundError:
+        logger.error(f"❌ JSON file not found at {file_path}")
+        return []
+    except json.JSONDecodeError:
+        logger.error(f"❌ Failed to decode JSON. Check syntax in {file_path}")
+        return []
+
+def load_test_cases(file_path):
+    """Loads cases from YAML file safely"""
+    try:
+        with open(file_path, 'r') as f:
+            data = yaml.safe_load(f)
+            cases = data.get("test_cases", [])
+            logger.info(f"📦 Loaded {len(cases)} test cases from {file_path}")
+            return cases
+    except Exception as e:
+        logger.error(f"❌ Failed to load YAML: {e}")
+        return []
+
+def call_rag_api(message, session_id, file_id):
+    payload = {"session_id": session_id, "message": message, "file_id": file_id}
+    try:
+        response = requests.post(f"{BASE_URL}/chat/message", json=payload, timeout=90)
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        logger.error(f"API Error: {e}")
+        return {}
+
+def send_feedback(message_id, is_positive):
+    """Sends feedback to trigger continuous learning in the backend."""
+    payload = {
+        "message_id": message_id,
+        "is_positive": is_positive,
+        "comments": "Automated test suite validation"
+    }
+    try:
+        response = requests.post(f"{BASE_URL}/chat/feedback", json=payload, timeout=10)
+        response.raise_for_status()
+        logger.info(f"🎓 Feedback submitted for message ID {message_id} -> AI learned successfully!")
+        return True
+    except Exception as e:
+        logger.error(f"⚠️ Failed to submit feedback for message ID {message_id}: {e}")
+        return False
+
+def run_automated_suite():
+    # 1. Load Data
+    test_cases = load_test_cases(YML_FILE)
+    if not test_cases:
+        return
+
+    logger.info(f"🚀 Loaded {len(test_cases)} test cases from {YML_FILE}")
+
+    # 2. Upload File Once
+    try:
+        with open(FILE_PATH, "rb") as f:
+            resp = requests.post(f"{BASE_URL}/files/upload", files={"file": f})
+            file_id = resp.json()["id"]
+            logger.info(f"✅ Data uploaded. ID: {file_id}")
+    except Exception as e:
+        logger.error(f"❌ Upload failed: {e}")
+        return
+
+    stats = {"passed": 0, "failed": 0}
+    list_faided_cases = []
+    
+    # 3. Process Cases
+    for case in test_cases:
+        logger.info(f"\n--- [ID {case['id']}] Starting ---")
+        session_id = f"suite_{timestamp}_{case['id']}"
+        current_msg = case['query']
+        case_passed = False
+        start_time = time.time()
+        for n in range(1, MAX_RETRIES + 1):
+            logger.info(f"Attempt {n}: Sending query...")
+            data = call_rag_api(current_msg, session_id, file_id)
+            print(f"data\t\t\n{data}\n")
+            answer = str(data.get("response", ""))
+            code = str(data.get("generated_code", ""))
+            message_id = data.get("message_id")  # Extract the newly added message_id
+
+            # Validation logic
+            value_match = case["expected_val"].lower() in answer.lower()
+
+            if value_match:
+                logger.info(f"✅ Success on attempt {n}")
+                stats["passed"] += 1
+                case_passed = True
+                
+                # TRIGGER LEARNING: Send positive feedback to the backend
+                if message_id:
+                    send_feedback(message_id, is_positive=True)
+                else:
+                    logger.warning("⚠️ Success, but no message_id returned to send feedback.")
+                break
+            else:
+                logger.warning(f"⚠️ Attempt {n} incorrect. Retrying...\n Query: {case['query']}\nAnswer: {answer}\nCode: {code} \nExpected Value: {case['expected_val']}")
+                
+                current_msg = f"Your answer was wrong. Please re-read the question and provide a correct response.\nQuery: {case['query']}\nAnswer: {answer} \nExpected Value: {case['expected_val']}"
+
+        end_time = time.time()
+        elapsed_time = end_time - start_time
+        logger.info(f"⏱️ execution time for task \'{current_msg}\' : {elapsed_time:.2f} seconds")
+        
+        if not case_passed:
+            logger.error(f"❌ FAILED after {MAX_RETRIES} attempts.")
+            stats["failed"] += 1
+            list_faided_cases.append(case)
+
+        if stats["failed"] > MAX_FAILED_ALLOWED:
+            logger.error(f"❌ Stopping suite due to failure limit.")
+            break
+        
+
+    logger.info(f"\nFINISH: Passed {stats['passed']} | Failed {stats['failed']}")
+    logger.info(f"\nFailed Cases: {[case['id'] for case in list_faided_cases]}")
+
+
+if __name__ == "__main__":
+    start_time = time.time()
+    run_automated_suite()
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    logger.info(f"⏱️ Total execution time: {elapsed_time:.2f} seconds")-e 
+
+
+--- File: backend/requirements.txt ---
+aiofiles==23.2.1
+aiohappyeyeballs==2.6.1
+aiohttp==3.13.3
+aiosignal==1.4.0
+alembic==1.13.1
+annotated-doc==0.0.4
+annotated-types==0.7.0
+anyio==4.13.0
+asgiref==3.11.1
+attrs==26.1.0
+backoff==2.2.1
+bcrypt==5.0.0
+build==1.3.0
+certifi==2026.2.25
+cffi==2.0.0
+charset-normalizer==3.4.6
+chroma-hnswlib==0.7.3
+chromadb==0.4.22
+click==8.3.1
+contourpy==1.3.3
+cryptography==46.0.5
+cycler==0.12.1
+dataclasses-json==0.6.7
+distro==1.9.0
+durationpy==0.10
+ecdsa==0.19.1
+environs==14.6.0
+et_xmlfile==2.0.0
+faiss-cpu>=1.7.4
+fastapi==0.109.0
+fastapi_cors==0.0.6
+filelock==3.25.2
+flatbuffers==25.12.19
+fonttools==4.62.1
+frozenlist==1.8.0
+fsspec==2026.2.0
+googleapis-common-protos==1.73.0
+grpcio==1.78.0
+h11==0.16.0
+hf-xet==1.4.2
+httpcore==1.0.9
+httptools==0.7.1
+httpx==0.28.1
+httpx-sse==0.4.3
+huggingface_hub==0.36.2
+idna==3.11
+importlib_metadata==8.7.1
+importlib_resources==6.5.2
+Jinja2==3.1.6
+jiter==0.13.0
+joblib==1.5.3
+jsonpatch==1.33
+jsonpointer==3.1.1
+kaleido==0.2.1
+kiwisolver==1.5.0
+kubernetes==35.0.0
+langchain==1.2.13
+langchain-classic==1.0.3
+langchain-community==0.4.1
+langchain-core==1.2.23
+langchain-openai==1.1.12
+langchain-text-splitters==1.1.1
+langgraph==1.1.3
+langgraph-checkpoint==4.0.1
+langgraph-prebuilt==1.0.8
+langgraph-sdk==0.3.12
+langsmith==0.7.22
+Mako==1.3.10
+markdown-it-py==4.0.0
+MarkupSafe==3.0.3
+marshmallow==3.26.2
+matplotlib==3.8.2
+mdurl==0.1.2
+mmh3==5.2.1
+mpmath==1.3.0
+multidict==6.7.1
+mypy_extensions==1.1.0
+networkx==3.6.1
+nltk==3.9.4
+numpy==1.26.3
+oauthlib==3.3.1
+ollama==0.6.1
+onnxruntime==1.24.4
+openai==2.30.0
+openpyxl==3.1.2
+opentelemetry-api==1.40.0
+opentelemetry-exporter-otlp-proto-common==1.40.0
+opentelemetry-exporter-otlp-proto-grpc==1.40.0
+opentelemetry-instrumentation==0.61b0
+opentelemetry-instrumentation-asgi==0.61b0
+opentelemetry-instrumentation-fastapi==0.61b0
+opentelemetry-proto==1.40.0
+opentelemetry-sdk==1.40.0
+opentelemetry-semantic-conventions==0.61b0
+opentelemetry-util-http==0.61b0
+orjson==3.11.7
+ormsgpack==1.12.2
+overrides==7.7.0
+packaging==23.2
+pandas>=2.2.3
+passlib==1.7.4
+pillow==12.1.1
+plotly==5.18.0
+posthog==7.9.12
+propcache==0.4.1
+protobuf==6.33.6
+psycopg2-binary==2.9.9
+pulsar-client==3.10.0
+pyasn1==0.6.3
+pycparser==3.0
+pydantic==2.12.5
+pydantic-settings==2.13.1
+pydantic_core==2.41.5
+Pygments==2.19.2
+pyparsing==3.3.2
+PyPika==0.51.1
+pyproject_hooks==1.2.0
+python-dateutil==2.8.2
+python-dotenv==1.0.0
+python-jose==3.3.0
+python-multipart==0.0.6
+pytz==2026.1.post1
+PyYAML==6.0.3
+redis==5.0.1
+regex==2026.2.28
+requests==2.33.0
+requests-oauthlib==2.0.0
+requests-toolbelt==1.0.0
+RestrictedPython==7.0
+rich==14.3.3
+rsa==4.9.1
+safetensors==0.7.0
+scikit-learn==1.8.0
+scipy==1.16.3
+sentence-transformers==2.3.1
+sentencepiece==0.2.1
+setuptools==81.0.0
+shellingham==1.5.4
+six==1.17.0
+sniffio==1.3.1
+SQLAlchemy==2.0.25
+starlette==0.35.1
+sympy==1.14.0
+tenacity==8.5.0
+threadpoolctl==3.6.0
+tiktoken==0.12.0
+tokenizers==0.22.2
+torch==2.11.0
+tqdm==4.67.3
+transformers==4.57.6
+typer==0.24.1
+typing-inspect==0.9.0
+typing-inspection==0.4.2
+typing_extensions==4.15.0
+tzdata==2025.3
+urllib3==2.6.3
+uuid_utils==0.14.1
+uvicorn==0.27.0
+uvloop==0.22.1
+watchfiles==1.1.1
+websocket-client==1.9.0
+websockets==16.0
+wrapt==1.17.3
+xxhash==3.6.0
+yarl==1.23.0
+zipp==3.23.0
+zstandard==0.25.0
+-e 
+
+
