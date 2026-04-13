@@ -12,7 +12,7 @@ from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from app.utils.chart_generator import generate_chart
 from app.utils.logger import get_production_logger
-from .utility.CodeGenerationService import CodeGenerationService
+from app.agents.utility.CodeGenerationService import CodeGenerationService
 
 logger = get_production_logger("ai_da.analysis")
 
@@ -334,10 +334,10 @@ class ChartOrchestrator:
     Wraps the chart_generator utility and manages code generation.
     """
 
-    def __init__(self, df: pd.DataFrame):
+    def __init__(self, df: pd.DataFrame, tool_factory: Optional[CodeGenerationService] = None):
         self.df = df
-     
-    
+        self.tool_factory = tool_factory
+
     async def generate_charts(self, visual_recommendations: Optional[List[Dict]]) -> None:
         """
         Generate charts for each visual recommendation.
@@ -356,7 +356,7 @@ class ChartOrchestrator:
                 # 1. Try to generate pandas code from description using coding_llm
                 if rec.get("description"):
                     logger.info(f"🔄 Generating code for: {title}")
-                    generated_code = await CodeGenerationService.generate_and_execute(self.df, rec["description"])
+                    generated_code = await self.tool_factory.generate_code(rec["description"])
                     if generated_code:
                         rec["generated_code"] = generated_code
                         logger.info(f"✅ Generated code ({len(generated_code)} chars) for: {title}")
