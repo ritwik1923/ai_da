@@ -1,14 +1,6 @@
 from typing import Dict, Any
-try:
-    from . import CodeSanitizer
-    from .FewShotExampleStore import FewShotExampleStore
-except ImportError:  # pragma: no cover
-    try:
-        from utility import CodeSanitizer
-        from utility.FewShotExampleStore import FewShotExampleStore
-    except ImportError:
-        import CodeSanitizer
-        from FewShotExampleStore import FewShotExampleStore
+from . import CodeSanitizer
+from .FewShotExampleStore import FewShotExampleStore
 
 class CodeGenerationService:
     """Orchestrates code generation, sanitization, and execution."""

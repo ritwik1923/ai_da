@@ -1,15 +1,6 @@
 from langchain_classic.tools import Tool
 import json
-try:
-    from .CodeGenerationService import CodeGenerationService
-except ImportError:  # pragma: no cover
-    try:
-        from utility.CodeGenerationService import CodeGenerationService
-    except ImportError:
-        try:
-            from CodeGenerationService import CodeGenerationService
-        except ImportError:
-            from app.agents.utility.CodeGenerationService import CodeGenerationService
+from .CodeGenerationService import CodeGenerationService
 
 class AnalysisToolFactory:
     """Builds the tools required for the ReAct agent."""

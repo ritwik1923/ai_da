@@ -39,7 +39,9 @@ export default function FileUpload({ onFileUploaded, compact = false }: FileUplo
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'],
     },
     maxFiles: 1,
-    maxSize: 10 * 1024 * 1024, // 10MB
+    // Frontend limit: 1GB (backend will enforce actual production 100MB limit)
+    // Development: No practical limit | Production: Backend enforces 100MB
+    maxSize: 1024 * 1024 * 1024, // 1GB - effectively no limit for development
   });
 
   if (compact) {
@@ -105,7 +107,7 @@ export default function FileUpload({ onFileUploaded, compact = false }: FileUplo
             )}
             
             <p className="text-sm text-gray-500 mt-4">
-              Supports CSV, XLS, XLSX (max 10MB)
+              Supports CSV, XLS, XLSX (max 50MB)
             </p>
           </>
         )}

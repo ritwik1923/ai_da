@@ -1,5 +1,5 @@
 import api from './api';
-import { UploadedFile, ChatRequest, ChatResponse, ConversationHistory, FilePreview } from '../types';
+import { UploadedFile, ChatRequest, ChatResponse, ConversationHistory, FilePreview, KPIResponse } from '../types';
 
 export const chatService = {
   // Send a message
@@ -42,24 +42,30 @@ export const fileService = {
 
   // Get all files
   getFiles: async (): Promise<UploadedFile[]> => {
-    const response = await api.get('/api/files/files');
+    const response = await api.get('/api/files');
     return response.data;
   },
 
   // Get file details
   getFile: async (fileId: number): Promise<UploadedFile> => {
-    const response = await api.get(`/api/files/files/${fileId}`);
+    const response = await api.get(`/api/files/${fileId}`);
     return response.data;
   },
 
   // Delete file
   deleteFile: async (fileId: number): Promise<void> => {
-    await api.delete(`/api/files/files/${fileId}`);
+    await api.delete(`/api/files/${fileId}`);
   },
 
   // Preview file data
   previewFile: async (fileId: number, limit: number = 10): Promise<FilePreview> => {
-    const response = await api.get(`/api/files/files/${fileId}/preview?limit=${limit}`);
+    const response = await api.get(`/api/files/${fileId}/preview?limit=${limit}`);
+    return response.data;
+  },
+
+  // Get KPI summary for a file
+  getFileKpis: async (fileId: number): Promise<KPIResponse> => {
+    const response = await api.get(`/api/files/${fileId}/kpis`);
     return response.data;
   },
 };

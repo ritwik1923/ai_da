@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Brain, Send, ArrowLeft, FileSpreadsheet, Code, Loader } from 'lucide-react';
-import { chatService } from '../services/chatService';
+import { chatService, fileService } from '../services/chatService';
 import { ChatMessage, UploadedFile } from '../types';
 import MessageBubble from '../components/MessageBubble';
 import FileUpload from '../components/FileUpload';
@@ -23,7 +23,6 @@ export default function ChatPage() {
       const { session_id } = await chatService.createSession();
       setSessionId(session_id);
       
-      // Get file ID from navigation state
       if (location.state?.fileId) {
         setFileId(location.state.fileId);
       }
@@ -35,6 +34,25 @@ export default function ChatPage() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  // Load file details when a file is selected
+  useEffect(() => {
+    const loadFileDetails = async () => {
+      if (!fileId) {
+        setFileInfo(null);
+        return;
+      }
+
+      try {
+        const file = await fileService.getFile(fileId);
+        setFileInfo(file);
+      } catch (error) {
+        console.error('Error loading file details:', error);
+      }
+    };
+
+    loadFileDetails();
+  }, [fileId]);
 
   const handleSendMessage = async () => {
     if (!input.trim() || !sessionId) return;
@@ -111,11 +129,21 @@ export default function ChatPage() {
                 )}
               </div>
             </div>
-            {!fileId && (
-              <div className="text-sm text-amber-600 font-medium">
-                Please upload a file to start
-              </div>
-            )}
+            <div className="flex items-center gap-3">
+              {fileId && (
+                <button
+                  onClick={() => navigate('/kpis', { state: { fileId } })}
+                  className="btn-secondary"
+                >
+                  View KPI Dashboard
+                </button>
+              )}
+              {!fileId && (
+                <div className="text-sm text-amber-600 font-medium">
+                  Please upload a file to start
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </header>
@@ -200,7 +228,7 @@ export default function ChatPage() {
                     {fileInfo.row_count} rows × {fileInfo.columns.length} columns
                   </p>
                 </div>
-                
+
                 <div>
                   <h4 className="text-sm font-semibold text-gray-700 mb-2">Columns:</h4>
                   <div className="space-y-1">

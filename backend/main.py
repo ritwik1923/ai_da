@@ -6,6 +6,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 import logging
 import uvicorn
+import os
 
 from app.core.config import settings
 from app.core.database import engine, get_db
@@ -13,9 +14,24 @@ from app.models import models
 from app.api import chat, files, analysis
 
 # 1. FIX: Import AgentGlobals from your v3 agent file
-# from backend.app.agents.extra.data_analyst_v3 import AgentGlobals
+from app.agents.AgentGlobals import AgentGlobals
 
 logger = logging.getLogger(__name__)
+
+# Monkey-patch Starlette to accept larger uploads
+# Must be done BEFORE importing Starlette apps
+from starlette.requests import Request
+from starlette.datastructures import UploadFile
+
+# Set upload limits based on environment
+# Development: No limit (10GB) | Production: 100MB
+upload_limit = settings.MAX_FILE_SIZE
+Request.MAX_UPLOAD_SIZE = upload_limit
+os.environ['STARLETTE_FORM_PARSE_MAX_SIZE'] = str(upload_limit)
+
+env_display = f"[{settings.ENVIRONMENT.upper()}]" if settings.ENVIRONMENT else "[DEVELOPMENT]"
+limit_mb = upload_limit / (1024 * 1024)
+logger.info(f"📁 File Upload Limit {env_display}: {limit_mb:.0f}MB")
 
 app = FastAPI(
     title="AI Data Analyst Agent",

@@ -1,6 +1,8 @@
 import traceback
 import os
 import sys
+import json
+import re
 import pandas as pd
 import asyncio
 import logging
@@ -8,25 +10,19 @@ from typing import Dict, Any, List, Optional
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from starlette.concurrency import run_in_threadpool
-# from backend.app.utils.data_passport import generate_data_passport
-# Using production-grade structural logging
-try:
-    from app.utils.chart_generator import generate_chart, ChartGenerationError
-    from app.utils.logger import get_production_logger
-    from app.utils.self_healing_executor import SelfHealingExecutor
-    from app.utils.data_passport import generate_data_passport
-except ImportError:  # pragma: no cover
-    app_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-    if app_dir not in sys.path:
-        sys.path.insert(0, app_dir)
-    from utils.chart_generator import generate_chart, ChartGenerationError
-    from utils.logger import get_production_logger 
-    from utils.self_healing_executor import SelfHealingExecutor
-    from utils.data_passport import generate_data_passport
-logger = get_production_logger("ai_da.brain_v4")
+from app.utils.logger import get_production_logger
+from app.utils.self_healing_executor import SelfHealingExecutor
+from app.utils.data_passport import generate_data_passport
+from app.agents.AgentGlobals import AgentGlobals
+from app.agents.analysis_components import (
+    DataProfiler,
+    ResponseNormalizer,
+    AIAnalysisService,
+    ChartOrchestrator,
+)
+from app.agents.utility import CodeGenerationService
 
-from .utility.AgentGlobals import AgentGlobals
-# backend/app/agents/utility/DataAnalystAgent.py
+logger = get_production_logger("ai_da.brain_v4")
 
 class DataAnalystAgent:
     """
@@ -37,19 +33,32 @@ class DataAnalystAgent:
     def __init__(
         self, 
         df: pd.DataFrame,
-        reasoning_llm = AgentGlobals.reasoning_llm,
-        coding_llm = AgentGlobals.coding_llm,
-        example_store = AgentGlobals.example_store,
-        react_store = AgentGlobals.react_example_store
+        reasoning_llm = None,
+        coding_llm = None,
+        example_store = None,
+        react_store = None
 
     ):
         self.df = df
-        # self.executor = executor
-        self.reasoning_llm = reasoning_llm  # llama3.1:8b 
-        self.coding_llm = coding_llm        # deepseek-coder-v2:16b 
-        self.example_store = example_store  # Code_FewShotExampleStore 
-        self.react_store = react_store      # ReAct_FewShotExampleStore 
+        # Ensure AI globals are initialized if this class is used outside startup
+        if not AgentGlobals._initialized:
+            try:
+                AgentGlobals.initialize()
+            except Exception as init_error:
+                raise RuntimeError(
+                    "Failed to initialize AgentGlobals. Ensure the app startup sequence has initialized AI resources."
+                ) from init_error
+
+        self.reasoning_llm = reasoning_llm or AgentGlobals.reasoning_llm  # llama3.1:8b 
+        self.coding_llm = coding_llm or AgentGlobals.coding_llm        # deepseek-coder-v2:16b 
+        self.example_store = example_store or AgentGlobals.example_store  # Code_FewShotExampleStore 
+        self.react_store = react_store or AgentGlobals.react_example_store      # ReAct_FewShotExampleStore 
         
+        if self.reasoning_llm is None or self.coding_llm is None:
+            raise RuntimeError(
+                "LLM resources are not available. Check AgentGlobals.initialize() and model configuration."
+            )
+
         self.data_passport = generate_data_passport(df, max_sample_rows=3)
         # Pre-cache the context to avoid repeated processing [cite: 12, 18]
         self.schema_context = self.data_passport.to_prompt_context()
@@ -179,128 +188,142 @@ class DataAnalystAgent:
             "chart_data": None
         }
 
-class DataAnalystAgent_2:
-    def __init__(self, query: str, df, reasoning_llm, agent_executor, code_service, max_retries=2):
-        self.df = df
-        self.reasoning_llm = reasoning_llm
-        self.agent = agent_executor  # This should be an AgentExecutor
-        self.code_service = code_service
-        self.max_retries = max_retries
-        self.query = query
+    async def analyze_dataset(self) -> Dict[str, Any]:
+        """
+        Run a structured dataset understanding chain for KPI and visualization planning.
+        Delegates to AIAnalysisService and ResponseNormalizer for clean separation of concerns.
+        """
+        ai_service = AIAnalysisService(self.reasoning_llm, self.schema_context, self.df)
+        raw_response = await ai_service.analyze_dataset()
 
-    async def analyze(self, attempt=1, current_code=None, error_msg=None) -> dict:
+        # Normalize the AI response
+        normalizer = ResponseNormalizer()
+        parsed = normalizer.parse_json_response(raw_response)
+        normalized = normalizer.normalize_analysis_output(parsed, self.df)
+
+        # Log the generated visual recommendations for debugging
+        if normalized.get("visual_recommendations"):
+            logger.info(f"Generated {len(normalized['visual_recommendations'])} visual recommendations:")
+            for i, rec in enumerate(normalized["visual_recommendations"]):
+                logger.info(f"  {i+1}. {rec['title']}: {rec['suggested_query']}")
+
+        return normalized
+
+    async def generate_kpi_report(self) -> Dict[str, Any]:
+        """
+        Comprehensive KPI report generation using SOLID-principle components.
+        Orchestrates DataProfiler, AIAnalysisService, ChartOrchestrator, and ResponseNormalizer.
+        
+        Returns: KPI dashboard data with metrics, insights, and visual recommendations.
+        """
         try:
-            chart_query = any(k in self.query.lower() for k in ['plot', 'chart', 'visualize'])
-            
-            # --- BASE CASE: Out of retries ---
-            if chart_query and attempt > self.max_retries:
-                return {
-                    "answer": f"Chart Generation Failed after {self.max_retries} attempts.",
-                    "success": False,
-                    "generated_code": current_code
-                }
+            # 1. Data Profiling using dedicated component
+            profiler = DataProfiler(self.df)
+            profile = profiler.profile()
 
-            # --- ASYNC PATH: CHARTS ---
-            if chart_query:
-                if attempt == 1:
-                    # code_service.generate_and_execute must now be async
-                    analysis_output = await self.code_service.generate_and_execute_async(self.query)
-                    current_code = analysis_output.get("code")
-                else:
-                    current_code = await self.code_service.fix_code_async(current_code, error_msg)
+            summary = profiler.get_summary(profile)
+            metrics = profiler.get_metrics(profile)
+            top_categories = profiler.get_categories(profile)
+            date_metrics, date_insights = profiler.get_date_insights() or (None, None)
 
-                chart_data = generate_chart(self.df, self.query, current_code)
-                return {
-                    "answer": "Generated chart.",
-                    "generated_code": current_code,
-                    "chart_data": chart_data,
-                    "success": True
-                }
+            # Append date metrics if available
+            if date_metrics:
+                metrics.extend(date_metrics)
 
-            # --- ASYNC PATH: TEXT QUERIES ---
-            # Use ainvoke to prevent blocking the event loop 
-            response = await self.agent.ainvoke({"input": self.query, "agent_scratchpad": ""})
-            
+            # 3. AI-Powered Deep Analysis
+            ai_summary = None
+            data_quality_insights = None
+            analysis_insights_list = None
+            key_metrics = None
+            visual_recommendations = None
+            chart_data = []  # Initialize as empty list to ensure we always have a list
+            try:
+                # Run AI analysis
+                ai_result = await self.analyze_dataset()
+                ai_summary = ai_result.get("ai_summary")
+                data_quality_insights = ai_result.get("data_quality")
+                analysis_insights_list = ai_result.get("analysis_insights")
+                visual_recommendations = ai_result.get("visual_recommendations")
+
+                # Build key metrics
+                key_metrics = [
+                    f"Total Records: {profile['total_rows']:,}",
+                    f"Unique Features: {profile['total_columns']}",
+                    f"Data Completeness: {100 - profile['missing_percent']}%"
+                ]
+                if top_categories:
+                    key_metrics.append(f"Top Category: {top_categories[0]['value']}")
+
+                # 4. Chart Generation using dedicated orchestrator
+                if visual_recommendations:
+                    logger.info(f"📊 Starting chart generation for {len(visual_recommendations)} recommendations...")
+                    chart_orchestrator = ChartOrchestrator(self.df)
+                    await chart_orchestrator.generate_charts(visual_recommendations)
+                    logger.info(f"✅ Chart generation complete")
+                    
+                    # Extract charts from visual recommendations
+                    chart_data = [
+                        {
+                            "title": rec.get("title", "Unknown"),
+                            "data": rec.get("chart_data", {})
+                        }
+                        for rec in visual_recommendations
+                        if rec.get("chart_data")
+                    ]
+
+            except Exception as ai_error:
+                logger.error(f"AI analysis error: {ai_error}")
+                # Continue with basic KPIs only
+                chart_data = []
+
+            # 5. if AI not able to generate charts, create basic ones from the profile (ensures we always return some visual insights)
+            if not chart_data:
+                chart_data = self._generate_basic_charts(profile)
+
+            # 6. Return Complete KPI Report
             return {
-                "answer": response.get("output", str(response)),
-                "success": True
+                "summary": summary,
+                "metrics": metrics,
+                "charts": chart_data,
+                "top_categories": top_categories,
+                "date_insights": date_insights,
+                "data_quality": data_quality_insights,
+                "analysis_insights": analysis_insights_list,
+                "ai_summary": ai_summary,
+                "key_metrics": key_metrics,
+                "visual_recommendations": visual_recommendations
             }
 
         except Exception as e:
-            # Recursive retry for charts, or generic error return
-            if chart_query and attempt <= self.max_retries:
-                return await self.analyze(attempt=attempt + 1, current_code=current_code, error_msg=str(e))
-            
-            return {"answer": f"Analysis Error: {str(e)}", "success": False}
+            logger.error(f"Error generating KPI report: {str(e)}")
+            raise
 
+    def _generate_basic_charts(self, profile: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Generate basic fallback charts when AI charts aren't available."""
+        chart_data = []
 
-class DataAnalystAgent_1:
-    """Main facade orchestrating the analysis workflow."""
-    
-    def __init__(self,query: str, df, reasoning_llm, agent_executor, code_service, max_retries=2):
-        self.df = df
-        self.reasoning_llm = reasoning_llm
-        self.agent = agent_executor
-        self.code_service = code_service
-        self.max_retries = max_retries
-        self.query = query
+        if profile["numeric_count"]:
+            numeric_summary = profile["numeric_df"].agg(['min', 'mean', 'max']).transpose().reset_index()
+            top_metrics = numeric_summary.sort_values(by='mean', ascending=False).head(3)
 
-    def analyze(self, attempt=1, current_code=None, error_msg=None) -> dict:
-        
-        
-        try:
-            chart_query = any(k in self.query.lower() for k in ['plot', 'chart', 'visualize'])
-            
-            # --- BASE CASE: Out of retries ---
-            if chart_query and attempt > self.max_retries:
-                return {
-                    "answer": f"Chart Generation Failed after {self.max_retries} attempts. Last error: {error_msg}",
-                    "success": False,
-                    "generated_code": current_code,
-                    "traceback": error_msg
+            chart_data.append({
+                "title": "Numeric KPI Overview",
+                "data": {
+                    "data": [
+                        {
+                            "type": "bar",
+                            "x": top_metrics['index'].tolist(),
+                            "y": top_metrics['mean'].round(2).tolist(),
+                            "marker": {"color": ["#2563eb", "#9333ea", "#0f766e"]}
+                        }
+                    ],
+                    "layout": {
+                        "title": "Top numeric column averages",
+                        "xaxis": {"title": "Column"},
+                        "yaxis": {"title": "Average value"},
+                        "margin": {"t": 40, "b": 40, "l": 40, "r": 20}
+                    }
                 }
+            })
 
-            # --- FAST PATH: CHARTS ---
-            if chart_query:
-                # Step 1: Generate or Fix Code
-                if attempt == 1:
-                    analysis_output = self.code_service.generate_and_execute(self.query)
-                    current_code = analysis_output.get("code")
-                else:
-                    print(f"[DataAnalystAgent] 🛠️ Asking LLM to fix the chart code (Attempt {attempt}/{self.max_retries})...")
-                    # Use the dedicated fix method so it sees both the broken code AND the error
-                    current_code = self.code_service._llm_fix_code(current_code, error_msg)
-
-                # Step 2: Try to generate the chart (will raise ChartGenerationError if exec fails)
-                chart_data = generate_chart(self.df, self.query, current_code)
-                
-                # Step 3: Success Return
-                return {
-                    "answer": "Generated chart.",
-                    "generated_code": current_code,
-                    "chart_data": chart_data,
-                    "success": True
-                }
-
-            # --- STANDARD PATH: TEXT QUERIES ---
-            print(f"\n\nQuery: {self.query}\n\n")
-            response = self.agent.invoke({"input": self.query, "agent_scratchpad": ""})
-            
-            return {
-                "answer": response.get("output", str(response)),
-                "success": True
-            }
-
-        except ChartGenerationError as chart_e:
-            # --- RECURSIVE RETRY ---
-            print(f"[DataAnalystAgent] ⚠️ Chart execution failed: {str(chart_e)}")
-            # Return the recursive call, passing the exact broken code and error message
-            return self.analyze(attempt=attempt + 1, current_code=current_code, error_msg=str(chart_e))
-            
-        except Exception as e:
-            # Catch-all for other system failures
-            return {
-                "answer": f"Analysis Error: {str(e)}",
-                "success": False,
-                "traceback": traceback.format_exc()
-            }
+        return chart_data

@@ -9,6 +9,32 @@ import plotly.graph_objects as go
 import traceback
 
 # ==========================================
+# NUMBER FORMATTING UTILITY (for generated code)
+# ==========================================
+def format_number_indian(value: int | float, decimals: int = 2) -> str:
+    """
+    Format numbers using Indian numbering system (Crores, Lakhs, Thousands).
+    
+    Examples:
+        1000000 -> "10.00L" (10 Lakhs)
+        10000000 -> "1.00Cr" (1 Crore)
+        100000000 -> "10.00Cr" (10 Crores)
+    """
+    if value is None or pd.isna(value):
+        return "0"
+    
+    abs_val = abs(value)
+    if abs_val >= 10000000:  # Crores (1 Crore = 10 Million)
+        return f"{value / 10000000:.{decimals}f}Cr"
+    elif abs_val >= 100000:  # Lakhs (1 Lakh = 100K)
+        return f"{value / 100000:.{decimals}f}L"
+    elif abs_val >= 1000:  # Thousands
+        return f"{value / 1000:.{decimals}f}K"
+    else:
+        return f"{value:,.{decimals}f}"
+
+
+# ==========================================
 # 1. UTILITIES & ANALYZERS (SRP)
 # ==========================================
 class ChartGenerationError(Exception):
@@ -200,34 +226,11 @@ class ChartStrategyFactory:
         return BarChartStrategy()
 
 
-class ChartGeneratorService_old:
-    """Main Orchestrator Service."""
-    
-    @staticmethod
-    def generate_chart(df: pd.DataFrame, query: str, code: Optional[str] = None) -> Optional[Dict[str, Any]]:
-        if df is None or getattr(df, "empty", False):
-            print("[chart_generator] DataFrame is None or empty")
-            return None
-
-        if not QueryAnalyzer.subject_terms_match_columns(df, query.lower()):
-            print("[chart_generator] Query terms don't match dataset columns. Skipping chart.")
-            return None
-
-        strategy = ChartStrategyFactory.get_strategy(query, code)
-        result = strategy.generate(df, query)
-        
-        # Fallback to bar chart if Code Strategy failed 
-        if result is None and isinstance(strategy, CodeStrategy):
-            fallback_strategy = ChartStrategyFactory.get_strategy(query, code=None)
-            result = fallback_strategy.generate(df, query)
-
-        return result
-
 class ChartGeneratorService:
     """Main Orchestrator Service."""
     
     @staticmethod
-    def generate_chart(df: pd.DataFrame, query: str, code: Optional[str] = None, llm_fix_callback=None) -> Optional[Dict[str, Any]]:
+    def generate_chart(df: pd.DataFrame, query: str, code: Optional[str] = None) -> Optional[Dict[str, Any]]:
         if df is None or getattr(df, "empty", False):
             print("[chart_generator] DataFrame is None or empty")
             return None
@@ -267,10 +270,10 @@ class CodeStrategy(ChartStrategy):
                 print("[chart_generator] Blocked matplotlib code to prevent server hang.")
                 return None
 
-            # 2. Execute the code
-            # We inject px into the environment so DeepSeek can use it without importing
-            local_vars = {"df": df, "pd": pd, "px": px, "go": go}
-            exec(self.code, {"pd": pd, "df": df, "px": px, "go": go}, local_vars)
+            # 2. Execute the code with utility functions available
+            # We inject px, pd, go, and format_number_indian so DeepSeek-generated code can use them
+            local_vars = {"df": df, "pd": pd, "px": px, "go": go, "format_number_indian": format_number_indian}
+            exec(self.code, {"pd": pd, "df": df, "px": px, "go": go, "format_number_indian": format_number_indian}, local_vars)
             
             result = local_vars.get("result")
             
@@ -325,3 +328,15 @@ class CodeStrategy(ChartStrategy):
 def generate_chart(df: pd.DataFrame, query: str, code: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Legacy wrapper for backward compatibility."""
     return ChartGeneratorService.generate_chart(df, query, code)
+
+
+if __name__ == "__main__":
+    # Basic test case
+    df_test = pd.read_csv('/Users/rwk3030/Downloads/products-100.csv')
+
+    query_test = "This visualization will help identify which categories have higher price points and inform pricing strategies."
+    chart = generate_chart(df_test, query_test)
+    if chart:
+        fig = go.Figure(chart['data'])
+        fig.show()
+    print(chart)
