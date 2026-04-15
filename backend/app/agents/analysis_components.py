@@ -10,7 +10,7 @@ from typing import Dict, Any, List, Optional, Tuple
 from abc import ABC, abstractmethod
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
-from app.utils.chart_generator import generate_chart
+from app.utils.chart_generator import generate_chart, generate_chart_from_query
 from app.utils.logger import get_production_logger
 from app.agents.utility.CodeGenerationService import CodeGenerationService
 
@@ -257,76 +257,6 @@ class ResponseNormalizer:
         return normalized if normalized else None
 
 
-class AIAnalysisService:
-    """
-    Single Responsibility: Orchestrate AI analysis using language models.
-    Encapsulates all LLM interactions.
-    """
-
-    def __init__(self, reasoning_llm, schema_context: str, df: Optional[pd.DataFrame] = None):
-        self.reasoning_llm = reasoning_llm
-        self.schema_context = schema_context
-        self.df = df
-
-    async def analyze_dataset(self) -> Dict[str, Any]:
-        """Run AI dataset analysis."""
-        if self.reasoning_llm is None:
-            return {
-                "ai_summary": "AI analysis is unavailable because the reasoning model is not initialized.",
-                "data_quality": None,
-                "analysis_insights": None,
-                "visual_recommendations": None,
-            }
-
-        # Include actual column names and types in the prompt
-        available_columns = ""
-        if self.df is not None:
-            numeric_cols = self.df.select_dtypes(include=['number']).columns.tolist()
-            categorical_cols = self.df.select_dtypes(include=['object', 'category']).columns.tolist()
-            datetime_cols = self.df.select_dtypes(include=['datetime64']).columns.tolist()
-            available_columns = f"""
-
-        AVAILABLE COLUMNS IN THIS DATASET:
-        - Numeric (for Y-axis): {', '.join(numeric_cols) if numeric_cols else 'None'}
-        - Categorical (for grouping): {', '.join(categorical_cols) if categorical_cols else 'None'}
-        - Date/Time (for X-axis): {', '.join(datetime_cols) if datetime_cols else 'None'}
-
-        CRITICAL: Only use columns listed above. Do NOT suggest visualizations for columns like 'revenue', 'sales', etc. unless they actually appear in the list above.
-            """
-
-        prompt = PromptTemplate.from_template("""
-            You are an expert data analyst creating business intelligence dashboards for executives and managers with no technical background.
-            Your goal is to provide clear, actionable insights through both text summaries and automated chart generation.
-
-            Dataset Context:
-            {schema}{available_columns}
-
-            CRITICAL REQUIREMENTS for visual_recommendations:
-            - Each visualization must have a clear business purpose
-            - suggested_query must be written in natural English that a business user would understand
-            - ONLY use column names that are listed above under AVAILABLE COLUMNS
-            - Focus on queries that will generate meaningful charts using actual columns:
-              * "Show [metric] by [category]" - ONLY if both columns exist
-              * "Compare [metric] across [time]" - ONLY if both exist
-              * "Display distribution of [column]" - ONLY if column exists
-              * "Show relationship between [col1] and [col2]" - ONLY if both exist
-              * "Show top items by [metric]" - ONLY if columns exist
-
-            Output a JSON object with keys:
-            - ai_summary: Executive summary in plain business language (2-3 sentences)
-            - data_quality: Array of data quality issues found, each with metric, status (good/warning/critical), description
-            - analysis_insights: Array of business insights, each with title, description, key_findings array, recommendations array
-            - visual_recommendations: Array of exactly 1 visualization recommendations, each with:
-              * title: Clear, business-friendly title
-              * description: 2-sentence explanation of business value
-              * suggested_query: Natural language query using ONLY columns that exist (from AVAILABLE COLUMNS)
-
-            Focus on the most impactful visualizations that would help business decision-making.
-        """)
-
-        chain = prompt | self.reasoning_llm | StrOutputParser()
-        return await chain.ainvoke({"schema": self.schema_context, "available_columns": available_columns})
-
 
 class ChartOrchestrator:
     """
@@ -351,7 +281,7 @@ class ChartOrchestrator:
             generated_code = None
             chart_data = None
             title = rec.get("title", "Unknown")
-            
+
             try:
                 # 1. Try to generate pandas code from description using coding_llm
                 if rec.get("description"):
@@ -362,40 +292,51 @@ class ChartOrchestrator:
                         logger.info(f"✅ Generated code ({len(generated_code)} chars) for: {title}")
                     else:
                         logger.warning(f"⚠️ Code generation returned empty for: {title}")
-                
+
                 # 2. Generate chart using code if available, otherwise use description
                 if generated_code:
                     logger.info(f"🎨 Generating chart from code for: {title}")
                     try:
-                        chart_data = generate_chart(self.df, rec["description"], code=generated_code)
+                        chart_data = generate_chart(self.df, generated_code)
                         if chart_data:
                             logger.info(f"✅ Chart generated from code for: {title}")
                         else:
                             logger.warning(f"⚠️ Chart generation from code returned None for: {title}")
                             # Fallback: try without code
                             logger.info(f"🔄 Trying fallback: chart from description for: {title}")
-                            chart_data = generate_chart(self.df, rec["description"])
+                            chart_data = generate_chart_from_query(
+                                self.df,
+                                rec.get("suggested_query") or rec["description"],
+                                code=generated_code,
+                            )
                     except Exception as code_gen_error:
                         logger.warning(f"⚠️ Chart generation from code failed for {title}, trying fallback: {code_gen_error}")
                         # Fallback to description-based generation
                         try:
-                            chart_data = generate_chart(self.df, rec["description"])
+                            chart_data = generate_chart_from_query(
+                                self.df,
+                                rec.get("suggested_query") or rec["description"],
+                                code=generated_code,
+                            )
                         except Exception as fallback_error:
                             logger.error(f"❌ Fallback also failed for {title}: {fallback_error}")
                 else:
                     # No code generated, use description directly
                     logger.info(f"🎨 Generating chart from description for: {title}")
                     try:
-                        chart_data = generate_chart(self.df, rec["description"])
+                        chart_data = generate_chart_from_query(
+                            self.df,
+                            rec.get("suggested_query") or rec["description"],
+                        )
                         if chart_data:
                             logger.info(f"✅ Chart generated from description for: {title}")
                         else:
                             logger.warning(f"⚠️ Chart generation from description returned None for: {title}")
                     except Exception as desc_gen_error:
                         logger.error(f"❌ Chart generation from description failed for {title}: {desc_gen_error}")
-                
+
                 rec["chart_data"] = chart_data if chart_data else None
-                
+
             except Exception as e:
                 logger.error(f"❌ Unexpected error processing chart for {title}: {e}")
                 rec["chart_data"] = None

@@ -1,6 +1,15 @@
+import os
+import sys
+
 from .utility.custom_llm import OllamaLocalLLM
 from langchain_community.embeddings import OllamaEmbeddings
 from .utility.FewShotExampleStore import Code_FewShotExampleStore, ReAct_FewShotExampleStore
+
+
+def _configure_openmp_runtime():
+    """Avoid macOS libomp aborts when FAISS and numeric libraries are loaded together."""
+    if sys.platform == "darwin":
+        os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
 class AgentGlobals:
     """
@@ -17,6 +26,8 @@ class AgentGlobals:
     def initialize(cls):
         if cls._initialized:
             return
+
+        _configure_openmp_runtime()
             
         print("🚀 [Startup] Initializing Global LLMs and Vector DB...")
         

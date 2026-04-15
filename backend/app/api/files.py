@@ -14,7 +14,6 @@ from app.core.config import settings
 from app.models.models import UploadedFile
 from app.schemas.schemas import FileUploadResponse, KPIResponse, DataQualityInsight, AnalysisInsight
 from app.agents.DataAnalystAgent import DataAnalystAgent as ai_engg
-from app.utils.chart_generator import generate_chart
 
 router = APIRouter()
 

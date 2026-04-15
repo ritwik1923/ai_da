@@ -85,6 +85,12 @@ export default function KPIPage() {
     setTimeout(() => setCopiedCode(null), 2000);
   };
 
+  const validVisualRecommendations =
+    kpiData?.visual_recommendations?.filter((visual) => Boolean(visual.chart_data?.data?.data?.length)) ?? [];
+
+  const shouldShowFallbackCharts =
+    !loading && Boolean(kpiData?.charts?.length) && validVisualRecommendations.length === 0;
+
   return (
     <div className="h-screen flex flex-col bg-gray-50">
       <header className="bg-white shadow-sm border-b border-gray-200">
@@ -177,28 +183,34 @@ export default function KPIPage() {
                     <div className="grid gap-4 xl:grid-cols-12">
                       {/* LEFT COLUMN: Main Charts & Visualizations */}
                       <div className="xl:col-span-8 space-y-4">
-                        
-                        {/* {kpiData.charts.length > 0 && (
-                          <div className="rounded-3xl overflow-hidden border border-gray-200 bg-white shadow-sm">
-                            <div className="bg-gray-50 px-4 py-3 border-b border-gray-200">
-                              <p className="font-semibold text-gray-900">{kpiData.charts[0].title}</p>
+                        {shouldShowFallbackCharts && (
+                          <div className="rounded-3xl bg-white border border-gray-200 shadow-sm p-6 lg:p-8">
+                            <div className="mb-6 pb-5 border-b border-gray-200">
+                              <h3 className="text-2xl font-bold text-gray-900">Dashboard Charts</h3>
+                              <p className="text-gray-600 mt-2">AI chart recommendations were unavailable, so these standard dataset views are shown instead.</p>
                             </div>
-                            <div className="p-4">
-                              <Plot
-                                data={kpiData.charts[0].data.data}
-                                layout={{
-                                  ...kpiData.charts[0].data.layout,
-                                  autosize: true,
-                                  height: 360,
-                                }}
-                                config={{ responsive: true, displayModeBar: false }}
-                                className="w-full"
-                              />
+                            <div className="grid gap-6 grid-cols-1 2xl:grid-cols-2">
+                              {kpiData.charts.map((chart, idx) => (
+                                <div key={idx} className="rounded-3xl overflow-hidden border border-gray-200 bg-gray-50 shadow-sm">
+                                  <div className="bg-white px-5 py-4 border-b border-gray-200">
+                                    <p className="font-semibold text-gray-900">{chart.title}</p>
+                                  </div>
+                                  <div className="p-4 bg-white">
+                                    <Plot
+                                      data={enhanceChartData(chart.data.data)}
+                                      layout={enhanceChartLayout(chart.data.layout)}
+                                      config={getProfessionalChartConfig()}
+                                      className="w-full"
+                                      style={{ width: '100%', height: '360px' }}
+                                    />
+                                  </div>
+                                </div>
+                              ))}
                             </div>
                           </div>
-                        )} */}
+                        )}
 
-                        {kpiData.visual_recommendations && kpiData.visual_recommendations.length > 0 && (
+                        {validVisualRecommendations.length > 0 && (
                           <div className="rounded-3xl bg-gradient-to-br from-white to-gray-50 border border-gray-200 shadow-sm p-6 lg:p-8">
                             <div className="mb-8 pb-6 border-b border-gray-200">
                               <div className="flex items-center gap-3 mb-3">
@@ -210,7 +222,7 @@ export default function KPIPage() {
                               <p className="text-gray-600 ml-4">✨ AI-powered chart recommendations to uncover key insights from your data</p>
                             </div>
                             <div className="grid gap-6 grid-cols-1 2xl:grid-cols-2">
-                              {kpiData.visual_recommendations.map((visual, idx) => (
+                              {validVisualRecommendations.map((visual, idx) => (
                                 <div
                                   key={idx}
                                   onClick={() => setSelectedVisualization({ index: idx, visual })}
@@ -243,7 +255,7 @@ export default function KPIPage() {
                                         <div className="flex items-center justify-between mb-3">
                                           <p className="text-xs uppercase tracking-wider text-slate-400 font-bold">🐍 Generated Pandas Code</p>
                                           <button
-                                            onClick={() => handleCopyCode(visual.generated_code, idx)}
+                                            onClick={() => handleCopyCode(visual.generated_code ?? '', idx)}
                                             className="p-1.5 hover:bg-slate-800 rounded transition-colors"
                                             title="Copy code to clipboard"
                                           >
@@ -444,7 +456,7 @@ export default function KPIPage() {
                       <div className="flex items-center justify-between mb-4">
                         <p className="text-xs uppercase tracking-wider text-slate-400 font-semibold">🐍 Generated Pandas Code</p>
                         <button
-                          onClick={() => handleCopyCode(selectedVisualization.visual.generated_code, -1)}
+                          onClick={() => handleCopyCode(selectedVisualization.visual.generated_code ?? '', -1)}
                           className="p-1.5 hover:bg-slate-800 rounded transition-colors"
                           title="Copy code to clipboard"
                         >

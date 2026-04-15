@@ -6,6 +6,9 @@ class CodeGenerationService:
     """Orchestrates code generation, sanitization, and execution."""
     
     def __init__(self, coding_llm, example_store: FewShotExampleStore, df, executor):
+        if coding_llm is None:
+            raise ValueError("CodeGenerationService requires a coding_llm instance.")
+
         self.llm = coding_llm
         self.example_store = example_store
         self.df = df
@@ -26,8 +29,10 @@ class CodeGenerationService:
         return CodeSanitizer.CodeSanitizer.sanitize(raw_fixed)
 
     def generate_and_execute(self, task_description: str) -> Dict[str, Any]:
-        examples_str = self.example_store.get_context_string(task_description)
-        
+        examples_str = ""
+        if self.example_store is not None:
+            examples_str = self.example_store.get_context_string(task_description)
+
         coding_prompt = f"""
         Generate Python3.9 code using the 'df' variable.
         Task: {task_description}

@@ -1,5 +1,6 @@
 from langchain_classic.tools import Tool
 import json
+from starlette.concurrency import run_in_threadpool
 from .CodeGenerationService import CodeGenerationService
 
 class AnalysisToolFactory:
@@ -9,6 +10,10 @@ class AnalysisToolFactory:
         self.passport = data_passport
         self.code_service = code_service
         self.df = df
+
+    async def generate_code(self, task: str) -> str:
+        response = await run_in_threadpool(self.code_service.generate_and_execute, task)
+        return response.get("code", "")
 
     def create_tools(self) -> list[Tool]:
         def get_schema(_query: str) -> str:

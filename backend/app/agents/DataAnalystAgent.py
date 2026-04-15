@@ -11,6 +11,11 @@ from typing import Dict, Any, List, Optional
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from starlette.concurrency import run_in_threadpool
+
+BACKEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+if BACKEND_DIR not in sys.path:
+    sys.path.insert(0, BACKEND_DIR)
+
 from app.utils.logger import get_production_logger
 from app.utils.self_healing_executor import SelfHealingExecutor
 from app.utils.data_passport import generate_data_passport
@@ -18,7 +23,6 @@ from app.agents.AgentGlobals import AgentGlobals
 from app.agents.analysis_components import (
     DataProfiler,
     ResponseNormalizer,
-    AIAnalysisService,
     ChartOrchestrator,
 )
 from app.agents.utility.AnalysisToolFactory import AnalysisToolFactory
@@ -66,8 +70,8 @@ class DataAnalystAgent:
         self.executor = SelfHealingExecutor(df=df, max_retries=3)
         # 4. Wire up the Code Generation Service
         self.code_service = CodeGenerationService(
-            coding_llm=coding_llm,
-            example_store=example_store,
+            coding_llm=self.coding_llm,
+            example_store=self.example_store,
             df=df,
             executor=self.executor
         )
@@ -254,7 +258,7 @@ class DataAnalystAgent:
             chart_data = []  # Initialize as empty list to ensure we always have a list
             try:
                 # Run AI analysis
-                ai_result = await self.analyze_dataset()
+                ai_result = await self.analyze_dataset_kpi()
                 ai_summary = ai_result.get("ai_summary")
                 data_quality_insights = ai_result.get("data_quality")
                 analysis_insights_list = ai_result.get("analysis_insights")
@@ -272,13 +276,12 @@ class DataAnalystAgent:
                 # 4. Chart Generation using dedicated orchestrator
                 if visual_recommendations:
                     logger.info(f"📊 Starting chart generation for {len(visual_recommendations)} recommendations...")
-                    
-                    
-                    chart_orchestrator = ChartOrchestrator(self.df,tool_factory=self.tool_factory)
+
+                    chart_orchestrator = ChartOrchestrator(self.df, tool_factory=self.tool_factory)
                     await chart_orchestrator.generate_charts(visual_recommendations)
-                    logger.info(f"✅ Chart generation complete")
-                    
-                    # Extract charts from visual recommendations
+                    logger.info("✅ Chart generation complete")
+
+                    # Keep the top-level charts list in sync with the enriched visual recommendations
                     chart_data = [
                         {
                             "title": rec.get("title", "Unknown"),
@@ -315,6 +318,75 @@ class DataAnalystAgent:
             logger.error(f"Error generating KPI report: {str(e)}")
             raise
 
+    async def analyze_dataset_kpi(self) -> Dict[str, Any]:
+        """Run AI dataset analysis."""
+        if self.reasoning_llm is None:
+            return {
+                "ai_summary": "AI analysis is unavailable because the reasoning model is not initialized.",
+                "data_quality": None,
+                "analysis_insights": None,
+                "visual_recommendations": None,
+            }
+
+        # Include actual column names and types in the prompt
+        available_columns = ""
+        if self.df is not None:
+            numeric_cols = self.df.select_dtypes(include=['number']).columns.tolist()
+            categorical_cols = self.df.select_dtypes(include=['object', 'category']).columns.tolist()
+            datetime_cols = self.df.select_dtypes(include=['datetime64']).columns.tolist()
+            available_columns = f"""
+
+        AVAILABLE COLUMNS IN THIS DATASET:
+        - Numeric (for Y-axis): {', '.join(numeric_cols) if numeric_cols else 'None'}
+        - Categorical (for grouping): {', '.join(categorical_cols) if categorical_cols else 'None'}
+        - Date/Time (for X-axis): {', '.join(datetime_cols) if datetime_cols else 'None'}
+
+        CRITICAL: Only use columns listed above. Do NOT suggest visualizations for columns like 'revenue', 'sales', etc. unless they actually appear in the list above.
+            """
+
+        prompt = PromptTemplate.from_template("""
+            You are an expert data analyst creating business intelligence dashboards for executives and managers with no technical background.
+            Your goal is to provide clear, actionable insights through both text summaries and automated chart generation.
+
+            Dataset Context:
+            {schema}{available_columns}
+
+            CRITICAL REQUIREMENTS for visual_recommendations:
+            - Each visualization must have a clear business purpose
+            - suggested_query must be written in natural English that a business user would understand
+            - ONLY use column names that are listed above under AVAILABLE COLUMNS
+            - Focus on queries that will generate meaningful charts using actual columns:
+              * "Show [metric] by [category]" - ONLY if both columns exist
+              * "Compare [metric] across [time]" - ONLY if both exist
+              * "Display distribution of [column]" - ONLY if column exists
+              * "Show relationship between [col1] and [col2]" - ONLY if both exist
+              * "Show top items by [metric]" - ONLY if columns exist
+
+            Output a JSON object with keys:
+            - ai_summary: Executive summary in plain business language (2-3 sentences)
+            - data_quality: Array of data quality issues found, each with metric, status (good/warning/critical), description
+            - analysis_insights: Array of business insights, each with title, description, key_findings array, recommendations array
+            - visual_recommendations: Array of exactly 1 visualization recommendations, each with:
+              * title: Clear, business-friendly title
+              * description: 2-sentence explanation of business value
+              * suggested_query: Natural language query using ONLY columns that exist (from AVAILABLE COLUMNS)
+
+            Focus on the most impactful visualizations that would help business decision-making.
+        """)
+
+        chain = prompt | self.reasoning_llm | StrOutputParser()
+        raw_response = await chain.ainvoke({"schema": self.schema_context, "available_columns": available_columns})
+
+        normalizer = ResponseNormalizer()
+        parsed = normalizer.parse_json_response(raw_response)
+        normalized = normalizer.normalize_analysis_output(parsed, self.df)
+
+        if normalized.get("visual_recommendations"):
+            logger.info(f"Generated {len(normalized['visual_recommendations'])} KPI visual recommendations")
+
+        return normalized
+
+
     def _generate_basic_charts(self, profile: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Generate basic fallback charts when AI charts aren't available."""
         chart_data = []
@@ -347,6 +419,21 @@ class DataAnalystAgent:
 if __name__ == "__main__":
     import asyncio
     import plotly.graph_objects as go
+    from app.utils.chart_generator import generate_chart
+
+    # --- AI & Vector DB Initialization ---
+    try:
+        # This will load your LLMs and build the FAISS index in memory
+        AgentGlobals.initialize()
+        # app.state.code_learning = AgentGlobals.learn_code_4r_feedback
+        # app.state.react_learning = AgentGlobals.learn_react_4r_feedback
+        # app.state.vector_database_connection = True
+        logger.info("✅ AI Globals and Vector DB initialized successfully.")
+    except Exception as e:
+        # app.state.vector_database_connection = False
+        # 2. FIX: Updated logger message so you know exactly what failed
+        logger.error("❌ AI & Vector DB initialization failed during startup: %s", e)
+        
 
     async def run_test():
         # 1. Load the data
@@ -374,6 +461,23 @@ if __name__ == "__main__":
                 print("⚠️ First recommendation did not contain 'chart_data'.")
         else:
             print("⚠️ No visual recommendations were generated by the AI.")
+    async def code_gen():
+        df_test = pd.read_csv('/Users/rwk3030/Downloads/products-100.csv')
+        agent = DataAnalystAgent(df_test)
+        code_result = agent.code_service.generate_and_execute("This bar chart will help us visualize the distribution of customers across different countries, allowing us to identify potential markets and areas for growth.")
+        print("Generated Code:")
+        print(code_result.get("code"))
+        print("Execution Result:")
+        print(code_result.get("result"))
 
+        chart_data = generate_chart(df_test, code_result.get("code"))
+        logger.info("✅ Chart generation complete")
+        
+        if chart_data:
+            fig = go.Figure(chart_data["data"])
+            fig.show()
+
+        
     # 5. Execute the async loop
-    asyncio.run(run_test())
+    # asyncio.run(run_test())
+    asyncio.run(code_gen())

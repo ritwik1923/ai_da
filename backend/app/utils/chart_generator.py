@@ -1,12 +1,13 @@
 import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
-from typing import Dict, Any, Optional, Set, List, Type
+from typing import Dict, Any, Optional, Set, List
 import json
 import re
 from abc import ABC, abstractmethod
-import plotly.graph_objects as go
 import traceback
+from functools import wraps
+from pandas.api.types import is_numeric_dtype
 
 # ==========================================
 # NUMBER FORMATTING UTILITY (for generated code)
@@ -39,7 +40,215 @@ def format_number_indian(value: int | float, decimals: int = 2) -> str:
 # ==========================================
 class ChartGenerationError(Exception):
     """Exception raised when LLM-generated chart code fails to execute."""
-    pass
+
+
+class SafePlotlyExpress:
+    """Proxy for plotly.express with go-based fallbacks for pandas/plotly grouping issues."""
+
+    _WRAPPED_METHODS = {"bar", "scatter", "line", "histogram", "pie"}
+
+    def __init__(self, plotly_express_module):
+        self._px = plotly_express_module
+
+    def __getattr__(self, name: str):
+        attr = getattr(self._px, name)
+        if name in self._WRAPPED_METHODS and callable(attr):
+            return self._wrap_chart(name, attr)
+        return attr
+
+    def _wrap_chart(self, chart_type: str, chart_func):
+        @wraps(chart_func)
+        def safe_chart(*args, **kwargs):
+            try:
+                return chart_func(*args, **kwargs)
+            except KeyError:
+                return self._build_fallback(chart_type, *args, **kwargs)
+
+        return safe_chart
+
+    def _build_fallback(self, chart_type: str, *args, **kwargs):
+        data_frame = args[0] if args else kwargs.get('data_frame')
+        fallback_kwargs = dict(kwargs)
+        title = fallback_kwargs.pop('title', None)
+
+        if data_frame is None:
+            raise ValueError(f"{chart_type} fallback requires a data_frame argument.")
+
+        if chart_type == 'pie':
+            return self._build_pie_fallback(data_frame, title=title, **fallback_kwargs)
+
+        if chart_type == 'histogram':
+            return self._build_histogram_fallback(data_frame, title=title, **fallback_kwargs)
+
+        if chart_type == 'bar':
+            return self._build_bar_fallback(data_frame, title=title, **fallback_kwargs)
+
+        data_frame = self._with_index_column(data_frame)
+        x_col = fallback_kwargs.get('x')
+        y_col = fallback_kwargs.get('y')
+
+        if x_col is None and y_col is None:
+            raise ValueError(f"{chart_type} fallback requires x and y arguments.")
+        if x_col is None:
+            x_col = '__fallback_index__'
+        if y_col is None:
+            y_col = '__fallback_index__'
+
+        return self._build_xy_fallback(
+            chart_type,
+            data_frame,
+            x_col,
+            y_col,
+            color_col=fallback_kwargs.get('color'),
+            title=title,
+        )
+
+    def _build_bar_fallback(
+        self,
+        data_frame: pd.DataFrame,
+        x: Optional[str] = None,
+        y: Optional[str] = None,
+        color: Optional[str] = None,
+        title: Optional[str] = None,
+        **_: Any,
+    ) -> go.Figure:
+        if x is not None and x not in data_frame.columns:
+            x = None
+        if y is not None and y not in data_frame.columns:
+            y = None
+        if color is not None and color not in data_frame.columns:
+            color = None
+
+        if x is None and color is not None:
+            x = color
+
+        if x and y and is_numeric_dtype(data_frame[y]):
+            if color and color != x:
+                grouped = data_frame.groupby([x, color], dropna=False)[y].sum().reset_index()
+                figure = go.Figure()
+                for group_name, subset in grouped.groupby(color, dropna=False, sort=False):
+                    figure.add_trace(go.Bar(x=subset[x], y=subset[y], name=str(group_name)))
+                figure.update_layout(barmode='group')
+            else:
+                grouped = data_frame.groupby(x, dropna=False)[y].sum().reset_index()
+                figure = go.Figure(data=[go.Bar(x=grouped[x], y=grouped[y], name=str(y))])
+
+            if title:
+                figure.update_layout(title=title)
+            figure.update_xaxes(title=x)
+            figure.update_yaxes(title=y)
+            return figure
+
+        count_source = x or color or y
+        if count_source is None:
+            fallback_frame = self._with_index_column(data_frame)
+            return self._build_xy_fallback('bar', fallback_frame, '__fallback_index__', '__fallback_index__', title=title)
+
+        grouped = data_frame.groupby(count_source, dropna=False).size().reset_index(name='Count')
+        figure = go.Figure(data=[go.Bar(x=grouped[count_source], y=grouped['Count'], name='Count')])
+        if title:
+            figure.update_layout(title=title)
+        figure.update_xaxes(title=count_source)
+        figure.update_yaxes(title='Count')
+        return figure
+
+    def _with_index_column(self, data_frame: pd.DataFrame) -> pd.DataFrame:
+        if '__fallback_index__' in data_frame.columns:
+            return data_frame
+        frame = data_frame.copy()
+        frame['__fallback_index__'] = frame.index
+        return frame
+
+    def _build_xy_fallback(
+        self,
+        chart_type: str,
+        data_frame: pd.DataFrame,
+        x_col: str,
+        y_col: str,
+        color_col: Optional[str] = None,
+        title: Optional[str] = None,
+    ) -> go.Figure:
+        if x_col not in data_frame.columns or y_col not in data_frame.columns:
+            raise ValueError(f"{chart_type} fallback columns must exist in the DataFrame.")
+
+        fig = go.Figure()
+
+        if color_col and color_col in data_frame.columns:
+            grouped = data_frame.groupby(color_col, dropna=False, sort=False)
+            for group_name, subset in grouped:
+                fig.add_trace(self._build_xy_trace(chart_type, subset, x_col, y_col, str(group_name)))
+        else:
+            fig.add_trace(self._build_xy_trace(chart_type, data_frame, x_col, y_col, 'data'))
+
+        if title:
+            fig.update_layout(title=title)
+        if chart_type == 'bar' and color_col and color_col in data_frame.columns:
+            fig.update_layout(barmode='group')
+        fig.update_xaxes(title=x_col)
+        fig.update_yaxes(title=y_col)
+        return fig
+
+    def _build_xy_trace(
+        self,
+        chart_type: str,
+        data_frame: pd.DataFrame,
+        x_col: str,
+        y_col: str,
+        name: str,
+    ) -> Any:
+        if chart_type == 'bar':
+            return go.Bar(x=data_frame[x_col], y=data_frame[y_col], name=name)
+        if chart_type == 'line':
+            return go.Scatter(x=data_frame[x_col], y=data_frame[y_col], mode='lines', name=name)
+        return go.Scatter(x=data_frame[x_col], y=data_frame[y_col], mode='markers', name=name)
+
+    def _build_histogram_fallback(
+        self,
+        data_frame: pd.DataFrame,
+        x: Optional[str] = None,
+        color: Optional[str] = None,
+        title: Optional[str] = None,
+        **_: Any,
+    ) -> go.Figure:
+        if x is None or x not in data_frame.columns:
+            raise ValueError("Histogram fallback requires a valid x column.")
+
+        fig = go.Figure()
+        if color and color in data_frame.columns:
+            grouped = data_frame.groupby(color, dropna=False, sort=False)
+            for group_name, subset in grouped:
+                fig.add_trace(go.Histogram(x=subset[x], name=str(group_name), opacity=0.75))
+            fig.update_layout(barmode='overlay')
+        else:
+            fig.add_trace(go.Histogram(x=data_frame[x], name=x))
+
+        if title:
+            fig.update_layout(title=title)
+        fig.update_xaxes(title=x)
+        fig.update_yaxes(title='Count')
+        return fig
+
+    def _build_pie_fallback(
+        self,
+        data_frame: pd.DataFrame,
+        names: Optional[str] = None,
+        values: Optional[str] = None,
+        title: Optional[str] = None,
+        **_: Any,
+    ) -> go.Figure:
+        if names is None or values is None:
+            raise ValueError("Pie fallback requires names and values arguments.")
+        if names not in data_frame.columns or values not in data_frame.columns:
+            raise ValueError("Pie fallback columns must exist in the DataFrame.")
+
+        fig = go.Figure(data=[go.Pie(labels=data_frame[names], values=data_frame[values])])
+        if title:
+            fig.update_layout(title=title)
+        return fig
+
+
+SAFE_PX = SafePlotlyExpress(px)
+
 class QueryAnalyzer:
     """Handles NLP heuristics, intent parsing, and column matching."""
     
@@ -89,7 +298,7 @@ class ChartStrategy(ABC):
     """Abstract base class for all chart generation strategies."""
     
     @abstractmethod
-    def generate(self, df: pd.DataFrame, query: str) -> Optional[Dict[str, Any]]:
+    def generate(self, df: pd.DataFrame, query: Optional[str] = None) -> Optional[Dict[str, Any]]:
         pass
     
     def _format_response(self, fig: go.Figure, chart_type: str) -> Dict[str, Any]:
@@ -122,7 +331,7 @@ class LineChartStrategy(ChartStrategy):
             return None
 
         x_col, y_col = date_columns[0], numeric_columns[0]
-        fig = px.line(df.head(200), x=x_col, y=y_col, title=f"{y_col} over {x_col}")
+        fig = SAFE_PX.line(df.head(200), x=x_col, y=y_col, title=f"{y_col} over {x_col}")
         return self._format_response(fig, 'line')
 
 
@@ -151,7 +360,7 @@ class BarChartStrategy(ChartStrategy):
         if not any(k in query_lower for k in ['for each', 'each', 'all', 'every']) and len(grouped) > 10:
             grouped = grouped.nlargest(10, y_plot_col)
         
-        fig = px.bar(grouped, x=x_col, y=y_plot_col, title=f"{y_plot_col} by {x_col}")
+        fig = SAFE_PX.bar(grouped, x=x_col, y=y_plot_col, title=f"{y_plot_col} by {x_col}")
         return self._format_response(fig, 'bar')
 
 
@@ -161,7 +370,7 @@ class HistogramStrategy(ChartStrategy):
         if not numeric:
             return None
         col = numeric[0]
-        fig = px.histogram(df, x=col, title=f"Distribution of {col}", nbins=30)
+        fig = SAFE_PX.histogram(df, x=col, title=f"Distribution of {col}", nbins=30)
         return self._format_response(fig, 'histogram')
 
 
@@ -176,7 +385,7 @@ class ScatterPlotStrategy(ChartStrategy):
         remaining_numeric = [c for c in numeric if c != x_col] or numeric
         y_col = QueryAnalyzer.select_column(query_lower, remaining_numeric, ["stock", "y", "quantity", "count", "price", "value"])
         
-        fig = px.scatter(df.head(100), x=x_col, y=y_col, title=f"{y_col} vs {x_col}")
+        fig = SAFE_PX.scatter(df.head(100), x=x_col, y=y_col, title=f"{y_col} vs {x_col}")
         return self._format_response(fig, 'scatter')
 
 
@@ -190,7 +399,7 @@ class PieChartStrategy(ChartStrategy):
         
         names_col, values_col = categorical[0], numeric[0]
         grouped = df.groupby(names_col, dropna=False)[values_col].sum().reset_index().nlargest(10, values_col)
-        fig = px.pie(grouped, names=names_col, values=values_col, title=f"{values_col} by {names_col}")
+        fig = SAFE_PX.pie(grouped, names=names_col, values=values_col, title=f"{values_col} by {names_col}")
         return self._format_response(fig, 'pie')
 
 # ==========================================
@@ -201,8 +410,8 @@ class ChartStrategyFactory:
     """Decides which strategy to use based on the query and context."""
     
     @staticmethod
-    def get_strategy(query: str, code: Optional[str] = None) -> ChartStrategy:
-        query_lower = query.lower()
+    def get_strategy(query: Optional[str] = None, code: Optional[str] = None) -> ChartStrategy:
+        query_lower = (query or "").lower()
         
         # Determine if we should use CodeStrategy
         if code:
@@ -230,17 +439,19 @@ class ChartGeneratorService:
     """Main Orchestrator Service."""
     
     @staticmethod
-    def generate_chart(df: pd.DataFrame, query: str, code: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    def generate_chart_from_query(df: pd.DataFrame, query: str, code: Optional[str] = None) -> Optional[Dict[str, Any]]:
         if df is None or getattr(df, "empty", False):
             print("[chart_generator] DataFrame is None or empty")
             return None
+
+        query_lower = query.lower()
 
         # 1. Get the strategy (Will be ExecutedCodeStrategy if DeepSeek wrote code)
         strategy = ChartStrategyFactory.get_strategy(query, code)
         
         # 2. If we do NOT have code, apply the strict NLP heuristic guardrail
         if not isinstance(strategy, CodeStrategy):
-            if not QueryAnalyzer.subject_terms_match_columns(df, query.lower()):
+            if not QueryAnalyzer.subject_terms_match_columns(df, query_lower):
                 print("[chart_generator] Query terms don't match dataset columns. Skipping heuristic chart.")
                 return None
 
@@ -249,7 +460,9 @@ class ChartGeneratorService:
         
         # 4. If Code Strategy failed gracefully (e.g. blocked Matplotlib) and returned None, try fallback
         if result is None and isinstance(strategy, CodeStrategy):
-            if not QueryAnalyzer.subject_terms_match_columns(df, query.lower()):
+            if not query:
+                return None
+            if not QueryAnalyzer.subject_terms_match_columns(df, query_lower):
                 print("[chart_generator] Query terms don't match dataset columns. Skipping fallback chart.")
                 return None
             
@@ -257,13 +470,23 @@ class ChartGeneratorService:
             result = fallback_strategy.generate(df, query)
 
         return result
+
+    @staticmethod
+    def generate_chart(df: pd.DataFrame, code: str) -> Optional[Dict[str, Any]]:
+        if df is None or getattr(df, "empty", False):
+            print("[chart_generator] DataFrame is None or empty")
+            return None
+
+        return CodeStrategy(code).generate(df)
+
+
 class CodeStrategy(ChartStrategy):
     """Generates charts by executing arbitrary python code generated by LLMs."""
     
     def __init__(self, code: str):
         self.code = code
 
-    def generate(self, df: pd.DataFrame, query: str) -> Optional[Dict[str, Any]]:
+    def generate(self, df: pd.DataFrame, query: Optional[str] = None) -> Optional[Dict[str, Any]]:
         try:
             # 1. Block malicious or blocking GUI calls
             if any(token in self.code.lower() for token in ['matplotlib', 'pyplot', 'plt.', '.show(', '.plot(']):
@@ -272,8 +495,8 @@ class CodeStrategy(ChartStrategy):
 
             # 2. Execute the code with utility functions available
             # We inject px, pd, go, and format_number_indian so DeepSeek-generated code can use them
-            local_vars = {"df": df, "pd": pd, "px": px, "go": go, "format_number_indian": format_number_indian}
-            exec(self.code, {"pd": pd, "df": df, "px": px, "go": go, "format_number_indian": format_number_indian}, local_vars)
+            local_vars = {"df": df, "pd": pd, "px": SAFE_PX, "go": go, "format_number_indian": format_number_indian}
+            exec(self.code, {"pd": pd, "df": df, "px": SAFE_PX, "go": go, "format_number_indian": format_number_indian}, local_vars)
             
             result = local_vars.get("result")
             
@@ -289,19 +512,19 @@ class CodeStrategy(ChartStrategy):
             if result_df is None:
                 raise ValueError(f"Executed code did not return a valid DataFrame or Plotly Figure in 'result'. Type was: {type(result)}")
             
-            query_lower = query.lower()
+            query_lower = (query or "").lower()
             if len(result_df) > 20 and not any(k in query_lower for k in ['for each', 'each', 'all', 'every']):
                 result_df = result_df.nlargest(20, 'Value') if 'Value' in result_df.columns else result_df.head(20)
             
-            title = query.capitalize()
+            title = query.capitalize() if query else "Generated chart"
             if any(w in query_lower for w in ['pie', 'proportion', 'percentage']):
-                fig = px.pie(result_df, names='Category', values='Value', title=title)
+                fig = SAFE_PX.pie(result_df, names='Category', values='Value', title=title)
                 return self._format_response(fig, 'pie')
             elif any(w in query_lower for w in ['line', 'trend', 'over time']):
-                fig = px.line(result_df, x='Category', y='Value', title=title)
+                fig = SAFE_PX.line(result_df, x='Category', y='Value', title=title)
                 return self._format_response(fig, 'line')
             else:
-                fig = px.bar(result_df, x='Category', y='Value', title=title)
+                fig = SAFE_PX.bar(result_df, x='Category', y='Value', title=title)
                 return self._format_response(fig, 'bar')
                 
         except Exception as e:
@@ -325,17 +548,23 @@ class CodeStrategy(ChartStrategy):
 # ==========================================
 # PUBLIC API WRAPPER
 # ==========================================
-def generate_chart(df: pd.DataFrame, query: str, code: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    """Legacy wrapper for backward compatibility."""
-    return ChartGeneratorService.generate_chart(df, query, code)
+def generate_chart_from_query(df: pd.DataFrame, query: str, code: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Generate a chart from a natural-language query, optionally using generated code first."""
+    return ChartGeneratorService.generate_chart_from_query(df, query, code)
+
+
+def generate_chart(df: pd.DataFrame, code: str) -> Optional[Dict[str, Any]]:
+    """Execute generated chart code and return the resulting chart payload."""
+    return ChartGeneratorService.generate_chart(df, code)
 
 
 if __name__ == "__main__":
     # Basic test case
     df_test = pd.read_csv('/Users/rwk3030/Downloads/products-100.csv')
 
-    query_test = "This visualization will help identify which categories have higher price points and inform pricing strategies."
-    chart = generate_chart(df_test, query_test)
+    # code = "This visualization will help identify which categories have higher price points and inform pricing strategies."
+    code_ = "\nresult = df.groupby('category')['price'].mean().reset_index()"
+    chart = generate_chart(df_test, code_)
     if chart:
         fig = go.Figure(chart['data'])
         fig.show()
