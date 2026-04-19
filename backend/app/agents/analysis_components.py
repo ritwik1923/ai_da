@@ -243,14 +243,45 @@ class ResponseNormalizer:
             return None
 
         normalized = []
+        seen_signatures = set()
+
+        def build_signature(title: str, suggested_query: str) -> tuple[str, tuple[str, ...]]:
+            query_lower = (suggested_query or "").strip().lower()
+            title_lower = (title or "").strip().lower()
+
+            if any(token in query_lower for token in ["relationship", "correlation", " vs ", " versus "]):
+                intent = "relationship"
+            elif any(token in query_lower for token in ["distribution", "histogram"]):
+                intent = "distribution"
+            elif any(token in query_lower for token in ["trend", "over time", "across time"]):
+                intent = "trend"
+            elif any(token in query_lower for token in ["top ", "rank", "highest", "lowest"]):
+                intent = "ranking"
+            else:
+                intent = "comparison"
+
+            stopwords = {
+                "show", "display", "compare", "relationship", "between", "across", "over", "time",
+                "top", "by", "the", "and", "of", "for", "to", "with", "a", "an", "vs", "versus"
+            }
+            tokens = re.findall(r"[a-zA-Z_]{3,}", f"{title_lower} {query_lower}")
+            keywords = tuple(sorted({token for token in tokens if token not in stopwords}))
+            return intent, keywords
+
         for item in value:
             if not isinstance(item, dict):
                 continue
+            title = self.normalize_string(item.get("title")) or "Visualization"
+            description = self.normalize_string(item.get("description")) or ""
             suggested_query = self.normalize_string(item.get("suggested_query")) or ""
             if suggested_query and len(suggested_query.split()) >= 3:
+                signature = build_signature(title, suggested_query)
+                if signature in seen_signatures:
+                    continue
+                seen_signatures.add(signature)
                 normalized.append({
-                    "title": self.normalize_string(item.get("title")) or "Visualization",
-                    "description": self.normalize_string(item.get("description")) or "",
+                    "title": title,
+                    "description": description,
                     "suggested_query": suggested_query,
                 })
 
@@ -286,9 +317,12 @@ class ChartOrchestrator:
                 # 1. Try to generate pandas code from description using coding_llm
                 if rec.get("description"):
                     logger.info(f"🔄 Generating code for: {title}")
-                    generated_code = await self.tool_factory.generate_code(rec["description"])
+                    visualization_request = rec.get("suggested_query") or rec["description"]
+                    visualization_payload = await self.tool_factory.generate_visualisation_code(visualization_request)
+                    generated_code = visualization_payload.get("code", "")
                     if generated_code:
                         rec["generated_code"] = generated_code
+                        rec["visualisation_examples"] = visualization_payload.get("examples")
                         logger.info(f"✅ Generated code ({len(generated_code)} chars) for: {title}")
                     else:
                         logger.warning(f"⚠️ Code generation returned empty for: {title}")

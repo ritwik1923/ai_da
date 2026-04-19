@@ -1,9 +1,9 @@
 import time
 import requests
 import re
-from typing import Any, List, Optional, Dict
+from typing import Any, List, Optional
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import BaseMessage, AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import BaseMessage, AIMessage, SystemMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.callbacks import CallbackManagerForLLMRun
 
@@ -73,7 +73,7 @@ class OllamaLocalLLM(BaseChatModel):
         }
 
         try:
-            response = requests.post(f"{self.base_url}/api/chat", json=payload, timeout=120)
+            response = requests.post(f"{self.base_url}/api/chat", json=payload)
             response.raise_for_status()
             
             raw_text = response.json().get("message", {}).get("content", "")
@@ -86,9 +86,9 @@ class OllamaLocalLLM(BaseChatModel):
             
             return ChatResult(generations=[ChatGeneration(message=AIMessage(content=clean_text))])
             
-        except Exception as e:
+        except requests.exceptions.RequestException as e:
             print(f"--- [M4 Error] {self.model} failed: {str(e)} ---")
-            raise ValueError(f"Ollama local connection failed: {str(e)}")
+            raise ValueError(f"Ollama local connection failed: {str(e)}") from e
 
     async def _agenerate(self, *args, **kwargs):
         """Standard sync fallback for async calls."""

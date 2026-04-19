@@ -414,6 +414,45 @@ class HistogramStrategy(ChartStrategy):
         return self._format_response(figure, 'histogram')
 
 
+class CategoryDistributionStrategy(ChartStrategy):
+    def generate(self, df: pd.DataFrame, query: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        categorical = df.select_dtypes(include=['object', 'category', 'bool']).columns.tolist()
+        numeric = df.select_dtypes(include=['number']).columns.tolist()
+        if not categorical or not numeric:
+            return BarChartStrategy().generate(df, query)
+
+        query_lower = (query or "").lower()
+        category_col = QueryAnalyzer.select_column(query_lower, categorical, ["category", "brand", "type", "segment", "region", "status"])
+        metric_col = QueryAnalyzer.select_column(query_lower, numeric, ["price", "revenue", "sales", "amount", "value", "stock", "quantity"])
+
+        top_n = 10
+        if 'top 5' in query_lower:
+            top_n = 5
+        elif 'top 10' in query_lower:
+            top_n = 10
+
+        aggregated = (
+            df.groupby(category_col, dropna=False)[metric_col]
+            .sum()
+            .reset_index()
+            .sort_values(metric_col, ascending=False)
+            .head(top_n)
+        )
+        title = f"Top {top_n} {_humanize_label(category_col)} by Total {_humanize_label(metric_col)}"
+        figure = SAFE_PX.bar(
+            aggregated,
+            x=metric_col,
+            y=category_col,
+            orientation='h',
+            color=metric_col,
+            color_continuous_scale='Blues',
+            title=title,
+        )
+        figure.update_layout(coloraxis_showscale=False, yaxis={'categoryorder': 'total ascending'})
+        _style_figure(figure, 'bar', x_title=metric_col, y_title=category_col)
+        return self._format_response(figure, 'bar')
+
+
 class ScatterPlotStrategy(ChartStrategy):
     def generate(self, df: pd.DataFrame, query: Optional[str] = None) -> Optional[Dict[str, Any]]:
         numeric = df.select_dtypes(include=['number']).columns.tolist()
@@ -504,6 +543,8 @@ class ChartStrategyFactory:
         # Fallbacks mapping
         if any(w in query_lower for w in ['trend', 'over time', 'timeline', 'time series']):
             return LineChartStrategy()
+        if 'distribution' in query_lower and any(token in query_lower for token in [' by ', 'category', 'brand', 'segment', 'region']):
+            return CategoryDistributionStrategy()
         if any(w in query_lower for w in ['distribution', 'histogram']):
             return HistogramStrategy()
         if any(w in query_lower for w in ['compare', 'comparison', 'vs', 'versus']):

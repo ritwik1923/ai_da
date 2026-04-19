@@ -31,3 +31,21 @@ def test_relationship_query_uses_aggregated_category_scatter():
     assert "average stock" in title_text.lower()
     assert "average price" in title_text.lower()
     assert "category" in title_text.lower()
+
+
+def test_price_distribution_by_category_defaults_to_top_10_ranked_bar():
+    df = pd.DataFrame(
+        {
+            "Category": [f"C{i}" for i in range(12)],
+            "Price": [10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120],
+        }
+    )
+
+    chart = generate_chart_from_query(df, "Price Distribution by Category")
+
+    assert chart is not None
+    assert chart["type"] == "bar"
+    figure_data = chart["data"]
+    trace = figure_data["data"][0]
+    assert len(trace.get("x", [])) == 10
+    assert figure_data.get("layout", {}).get("title", {}).get("text", "").lower().startswith("top 10")
