@@ -249,6 +249,43 @@ class SafePlotlyExpress:
 
 SAFE_PX = SafePlotlyExpress(px)
 
+
+def _humanize_label(value: Optional[str]) -> str:
+    if not value:
+        return ""
+    return str(value).replace("_", " ").strip().title()
+
+
+def _style_figure(
+    fig: go.Figure,
+    chart_type: str,
+    title: Optional[str] = None,
+    x_title: Optional[str] = None,
+    y_title: Optional[str] = None,
+) -> go.Figure:
+    if title:
+        fig.update_layout(title=title)
+
+    fig.update_layout(
+        template='plotly_white',
+        hovermode='closest',
+        legend_title_text='',
+        margin=dict(l=40, r=40, t=70, b=40),
+    )
+
+    if x_title:
+        fig.update_xaxes(title=_humanize_label(x_title))
+    if y_title:
+        fig.update_yaxes(title=_humanize_label(y_title))
+
+    if chart_type == 'bar':
+        fig.update_xaxes(tickangle=-30)
+
+    if chart_type == 'scatter':
+        fig.update_traces(marker=dict(opacity=0.85, line=dict(width=0.5, color='white')))
+
+    return fig
+
 class QueryAnalyzer:
     """Handles NLP heuristics, intent parsing, and column matching."""
     
@@ -301,10 +338,10 @@ class ChartStrategy(ABC):
     def generate(self, df: pd.DataFrame, query: Optional[str] = None) -> Optional[Dict[str, Any]]:
         pass
     
-    def _format_response(self, fig: go.Figure, chart_type: str) -> Dict[str, Any]:
+    def _format_response(self, figure: go.Figure, chart_type: str) -> Dict[str, Any]:
         return {
             'type': chart_type,
-            'data': json.loads(fig.to_json())
+            'data': json.loads(figure.to_json())
         }
 
 
@@ -313,7 +350,7 @@ class ChartStrategy(ABC):
 # ==========================================
 
 class LineChartStrategy(ChartStrategy):
-    def generate(self, df: pd.DataFrame, query: str) -> Optional[Dict[str, Any]]:
+    def generate(self, df: pd.DataFrame, query: Optional[str] = None) -> Optional[Dict[str, Any]]:
         date_columns = df.select_dtypes(include=['datetime64[ns]', 'datetime64']).columns.tolist()
         numeric_columns = df.select_dtypes(include=['number']).columns.tolist()
 
@@ -324,26 +361,27 @@ class LineChartStrategy(ChartStrategy):
                     if pd.to_datetime(df[c].head(50), errors='coerce').notna().any():
                         date_columns.append(c)
                         break
-                except Exception:
+                except (TypeError, ValueError):
                     continue
 
         if not date_columns or not numeric_columns:
             return None
 
         x_col, y_col = date_columns[0], numeric_columns[0]
-        fig = SAFE_PX.line(df.head(200), x=x_col, y=y_col, title=f"{y_col} over {x_col}")
-        return self._format_response(fig, 'line')
+        figure = SAFE_PX.line(df.head(200), x=x_col, y=y_col, title=f"{y_col} over {x_col}")
+        _style_figure(figure, 'line', x_title=x_col, y_title=y_col)
+        return self._format_response(figure, 'line')
 
 
 class BarChartStrategy(ChartStrategy):
-    def generate(self, df: pd.DataFrame, query: str) -> Optional[Dict[str, Any]]:
+    def generate(self, df: pd.DataFrame, query: Optional[str] = None) -> Optional[Dict[str, Any]]:
         categorical = df.select_dtypes(include=['object', 'category', 'bool']).columns.tolist()
         numeric = df.select_dtypes(include=['number']).columns.tolist()
 
         if not categorical or not numeric:
             return None
         
-        query_lower = query.lower()
+        query_lower = (query or "").lower()
         x_col = QueryAnalyzer.select_column(query_lower, categorical, ["category", "brand", "availability", "status", "color", "name", "type"])
         y_col = QueryAnalyzer.select_column(query_lower, numeric, ["stock", "price", "count", "total", "sum", "quantity", "amount", "value"])
         
@@ -360,37 +398,79 @@ class BarChartStrategy(ChartStrategy):
         if not any(k in query_lower for k in ['for each', 'each', 'all', 'every']) and len(grouped) > 10:
             grouped = grouped.nlargest(10, y_plot_col)
         
-        fig = SAFE_PX.bar(grouped, x=x_col, y=y_plot_col, title=f"{y_plot_col} by {x_col}")
-        return self._format_response(fig, 'bar')
+        figure = SAFE_PX.bar(grouped, x=x_col, y=y_plot_col, title=f"{_humanize_label(y_plot_col)} by {_humanize_label(x_col)}")
+        _style_figure(figure, 'bar', x_title=x_col, y_title=y_plot_col)
+        return self._format_response(figure, 'bar')
 
 
 class HistogramStrategy(ChartStrategy):
-    def generate(self, df: pd.DataFrame, query: str) -> Optional[Dict[str, Any]]:
+    def generate(self, df: pd.DataFrame, query: Optional[str] = None) -> Optional[Dict[str, Any]]:
         numeric = df.select_dtypes(include=['number']).columns.tolist()
         if not numeric:
             return None
         col = numeric[0]
-        fig = SAFE_PX.histogram(df, x=col, title=f"Distribution of {col}", nbins=30)
-        return self._format_response(fig, 'histogram')
+        figure = SAFE_PX.histogram(df, x=col, title=f"Distribution of {_humanize_label(col)}", nbins=30)
+        _style_figure(figure, 'histogram', x_title=col, y_title='Count')
+        return self._format_response(figure, 'histogram')
 
 
 class ScatterPlotStrategy(ChartStrategy):
-    def generate(self, df: pd.DataFrame, query: str) -> Optional[Dict[str, Any]]:
+    def generate(self, df: pd.DataFrame, query: Optional[str] = None) -> Optional[Dict[str, Any]]:
         numeric = df.select_dtypes(include=['number']).columns.tolist()
         if len(numeric) < 2:
             return BarChartStrategy().generate(df, query) # Fallback
         
-        query_lower = query.lower()
+        query_lower = (query or "").lower()
         x_col = QueryAnalyzer.select_column(query_lower, numeric, ["price", "x", "amount", "value", "stock", "quantity"])
         remaining_numeric = [c for c in numeric if c != x_col] or numeric
         y_col = QueryAnalyzer.select_column(query_lower, remaining_numeric, ["stock", "y", "quantity", "count", "price", "value"])
-        
-        fig = SAFE_PX.scatter(df.head(100), x=x_col, y=y_col, title=f"{y_col} vs {x_col}")
-        return self._format_response(fig, 'scatter')
+
+        categorical = df.select_dtypes(include=['object', 'category', 'bool']).columns.tolist()
+        category_col = QueryAnalyzer.select_column(
+            query_lower,
+            categorical,
+            ["category", "brand", "type", "segment", "region", "status", "group"],
+        ) if categorical else None
+
+        if category_col and df[category_col].nunique(dropna=False) > 1:
+            summary = (
+                df.groupby(category_col, dropna=False)
+                .agg(
+                    x_value=(x_col, 'mean'),
+                    y_value=(y_col, 'mean'),
+                    record_count=(category_col, 'size'),
+                )
+                .reset_index()
+                .sort_values('record_count', ascending=False)
+            )
+            if len(summary) > 12:
+                summary = summary.head(12)
+            summary['label'] = summary[category_col].astype(str)
+
+            title = f"Average {_humanize_label(y_col)} vs Average {_humanize_label(x_col)} by {_humanize_label(category_col)}"
+            figure = SAFE_PX.scatter(
+                summary,
+                x='x_value',
+                y='y_value',
+                color=category_col,
+                size='record_count',
+                title=title,
+                hover_data={'record_count': True},
+            )
+            for trace in figure.data:
+                trace.text = [trace.name] * len(trace.x)
+                trace.mode = 'markers+text'
+                trace.textposition = 'top center'
+            _style_figure(figure, 'scatter', x_title=f"Average {x_col}", y_title=f"Average {y_col}")
+            return self._format_response(figure, 'scatter')
+
+        figure = SAFE_PX.scatter(df.head(100), x=x_col, y=y_col, title=f"{_humanize_label(y_col)} vs {_humanize_label(x_col)}")
+        _style_figure(figure, 'scatter', x_title=x_col, y_title=y_col)
+        return self._format_response(figure, 'scatter')
 
 
 class PieChartStrategy(ChartStrategy):
-    def generate(self, df: pd.DataFrame, query: str) -> Optional[Dict[str, Any]]:
+    def generate(self, df: pd.DataFrame, query: Optional[str] = None) -> Optional[Dict[str, Any]]:
         categorical = df.select_dtypes(include=['object', 'category', 'bool']).columns.tolist()
         numeric = df.select_dtypes(include=['number']).columns.tolist()
 
@@ -399,8 +479,9 @@ class PieChartStrategy(ChartStrategy):
         
         names_col, values_col = categorical[0], numeric[0]
         grouped = df.groupby(names_col, dropna=False)[values_col].sum().reset_index().nlargest(10, values_col)
-        fig = SAFE_PX.pie(grouped, names=names_col, values=values_col, title=f"{values_col} by {names_col}")
-        return self._format_response(fig, 'pie')
+        figure = SAFE_PX.pie(grouped, names=names_col, values=values_col, title=f"{_humanize_label(values_col)} by {_humanize_label(names_col)}")
+        _style_figure(figure, 'pie')
+        return self._format_response(figure, 'pie')
 
 # ==========================================
 # 4. FACTORY & SERVICE (OCP, SRP)
@@ -502,8 +583,10 @@ class CodeStrategy(ChartStrategy):
             
             # 3. FAST PATH
             if isinstance(result, go.Figure):
+                chart_type = result.data[0].type if result.data else 'custom'
+                _style_figure(result, chart_type)
                 return {
-                    'type': result.data[0].type if result.data else 'custom',
+                    'type': chart_type,
                     'data': json.loads(result.to_json())
                 }
 
@@ -518,20 +601,23 @@ class CodeStrategy(ChartStrategy):
             
             title = query.capitalize() if query else "Generated chart"
             if any(w in query_lower for w in ['pie', 'proportion', 'percentage']):
-                fig = SAFE_PX.pie(result_df, names='Category', values='Value', title=title)
-                return self._format_response(fig, 'pie')
+                figure = SAFE_PX.pie(result_df, names='Category', values='Value', title=title)
+                _style_figure(figure, 'pie')
+                return self._format_response(figure, 'pie')
             elif any(w in query_lower for w in ['line', 'trend', 'over time']):
-                fig = SAFE_PX.line(result_df, x='Category', y='Value', title=title)
-                return self._format_response(fig, 'line')
+                figure = SAFE_PX.line(result_df, x='Category', y='Value', title=title)
+                _style_figure(figure, 'line', x_title='Category', y_title='Value')
+                return self._format_response(figure, 'line')
             else:
-                fig = SAFE_PX.bar(result_df, x='Category', y='Value', title=title)
-                return self._format_response(fig, 'bar')
+                figure = SAFE_PX.bar(result_df, x='Category', y='Value', title=title)
+                _style_figure(figure, 'bar', x_title='Category', y_title='Value')
+                return self._format_response(figure, 'bar')
                 
         except Exception as e:
             # Raise our custom exception so the orchestrator knows to retry!
             error_traceback = traceback.format_exc()
             print(f"\n[chart_generator] ❌ CODE CRASHED:\n{error_traceback}\n")
-            raise ChartGenerationError(f"Chart code execution failed:\n{error_traceback}")
+            raise ChartGenerationError(f"Chart code execution failed:\n{error_traceback}") from e
 
     def _normalize_result_to_dataframe(self, result: Any) -> Optional[pd.DataFrame]:
         if isinstance(result, dict):
@@ -566,6 +652,6 @@ if __name__ == "__main__":
     code_ = "\nresult = df.groupby('category')['price'].mean().reset_index()"
     chart = generate_chart(df_test, code_)
     if chart:
-        fig = go.Figure(chart['data'])
-        fig.show()
+        preview_figure = go.Figure(chart['data'])
+        preview_figure.show()
     print(chart)

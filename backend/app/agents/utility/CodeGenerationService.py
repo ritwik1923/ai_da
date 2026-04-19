@@ -53,6 +53,11 @@ class CodeGenerationService:
         11. Always use the columns from the provided dataframe and do not make assumptions about data types.
         12. CRITICAL TIMELINE RULE: If the user asks for a trend "over time" but the dataset lacks a `datetime` column, DO NOT use `pd.Grouper(freq=...)` or `.resample()`. Simply plot the numeric 'Index' directly on the x-axis (e.g., `x='Index'`). 
         13. Never attempt time-series frequency grouping on `int64` or `object` columns.
+        14. Build charts for non-technical business users. Prefer aggregated summaries over row-level plots when the raw chart would contain many points or categories.
+        15. For category comparisons, group the data first and sort the result so the ranking is obvious. Limit to the top 10-12 categories unless the user explicitly asks for all categories.
+        16. Avoid raw scatter plots with dozens of colored categories. If the task compares two numeric metrics and a category dimension exists, first aggregate by that category and plot one labeled point per category, using bubble size for count when helpful.
+        17. Prefer chart types that match the question: use bar charts for comparisons, histograms or box plots for distributions, and only use scatter plots for clear metric-vs-metric relationships.
+        18. Use clear chart titles that describe the insight in business language, and make the figure readable by adding labels or ordering where appropriate.
                 
         # """
         # coding_prompt = f"""

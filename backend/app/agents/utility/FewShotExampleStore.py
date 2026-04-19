@@ -259,7 +259,7 @@ class Code_FewShotExampleStore(FewShotExampleStore):
         },
         {
             "task": "Visualize the relationship between price and stock levels.",
-            "code": "result = px.scatter(df, x='Price', y='Stock', color='Category', title='Price vs Stock Relationship')"
+            "code": "category_summary = df.groupby('Category', dropna=False).agg(Average_Price=('Price', 'mean'), Average_Stock=('Stock', 'mean'), Product_Count=('Category', 'size')).reset_index().sort_values('Product_Count', ascending=False).head(12)\nresult = px.scatter(category_summary, x='Average_Price', y='Average_Stock', color='Category', size='Product_Count', text='Category', title='Average Price vs Average Stock by Category')\nresult.update_traces(textposition='top center')"
         },
         {
             "task": "Show the distribution of product prices.",
