@@ -15,6 +15,12 @@ This AI-powered application allows users to upload CSV/Excel files of **any size
 - **🆕 Self-heals code errors** automatically
 - **🆕 Zero data leakage** - only metadata sent to LLM
 
+## Video Demo of KPI generation
+
+https://github.com/user-attachments/assets/119dc96f-31f6-46fc-820d-a86a29b0add7
+
+
+
 ## 🚀 Features
 
 ### Core Features
