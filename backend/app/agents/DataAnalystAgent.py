@@ -8,6 +8,12 @@ import plotly.graph_objects as go
 import asyncio
 import logging
 from typing import Dict, Any, List, Optional
+try:
+    # Newer langchain splits classic agent APIs into langchain_classic.
+    from langchain_classic.agents import AgentExecutor, create_react_agent
+except ImportError:
+    # Backward compatibility for environments that still expose these in langchain.
+    from langchain.agents import AgentExecutor, create_react_agent
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from starlette.concurrency import run_in_threadpool
@@ -91,7 +97,7 @@ class DataAnalystAgent:
         self.available_columns = ""
         if self.df is not None:
             numeric_cols = self._get_numeric_analysis_columns()
-            categorical_cols = self.df.select_dtypes(include=['object', 'category']).columns.tolist()
+            categorical_cols = self._get_categorical_analysis_columns()
             datetime_cols = self._infer_datetime_columns()
             categorical_cols = [
                 col for col in categorical_cols
@@ -156,7 +162,7 @@ class DataAnalystAgent:
             chart_data = []  # Initialize as empty list to ensure we always have a list
             try:
                 # Run AI analysis
-                ai_result = await self.analyze_dataset_kpi()
+                ai_result = await self._analyze_dataset_kpi()
                 ai_summary = ai_result.get("ai_summary")
                 data_quality_insights = ai_result.get("data_quality")
                 analysis_insights_list = ai_result.get("analysis_insights")
@@ -214,7 +220,560 @@ class DataAnalystAgent:
             logger.error(f"Error generating KPI report: {str(e)}")
             raise
 
-    async def analyze_dataset_kpi(self) -> Dict[str, Any]:
+    async def analysis(self,query, conversation_memory=None):
+        # # 5. Create Request-Specific LangChain Tools
+        tool_factory = AnalysisToolFactory(
+            data_passport=self.data_passport,
+            code_service=self.code_service,
+            df=self.df
+        )
+        conversation_memory = conversation_memory or []
+        history_text = "".join([f"{msg['role']}: {msg['content']}\n" for msg in conversation_memory])
+        tools = tool_factory.create_tools()
+        prompt = PromptTemplate(
+        template="""You are a strict Data Analyst Manager.
+        Context: {schema_context}
+        History: {history_text}
+        Tools: {tool_names} {tools}
+        
+        ### EXAMPLES OF CORRECT FORMATTING ###
+        Mimic this exact Thought/Action/Observation formatting:
+        {react_examples_context}
+        ######################################
+            
+        ## Rules:
+        1. If you call a tool, you will receive an 'Observation'.
+        2. Use that 'Observation' IMMEDIATELY to provide your 'Final Answer'.
+        3. DO NOT start a new analysis or ask new questions.
+        4. Review the Schema and Previous Conversation. 
+        5. If you need to perform an analysis, use a tool.
+        6. You run in a loop. After you output an Action, the system will execute it and return an "Observation:". 
+        7. Once you see the "Observation:", you MUST proceed to OPTION 2 and give the Final Answer.
+
+        ## STRICT FORMATTING RULES (CRITICAL):
+        You must choose EXACTLY ONE of the following options per response. 
+        DO NOT USE MARKDOWN. NEVER use `##`, `**`, or bold text for the keywords. They must be exactly "Thought:", "Action:", "Action Input:", and "Final Answer:".
+
+        OPTION 1: Use a Tool (Do NOT include Final Answer)
+        Thought: [your reasoning]
+        Action: [MUST be EXACTLY one of: {tool_names}]
+        Action Input: [Provide the tool input]
+
+        OR
+
+        OPTION 2: Give the Final Answer (Do NOT include Action)
+        Thought: Based on the observation, I now know the answer.
+        Final Answer: [Your exact answer]
+
+        ---
+        Question: {input}
+        {agent_scratchpad}""",
+        input_variables=["input", "tools", "tool_names", "agent_scratchpad"],
+        partial_variables={
+            "schema_context": self.schema_context, 
+            "history_text": history_text,
+            "react_examples_context": self.react_store.get_context_string(query) if self.react_store else "No examples available.",
+            }
+        )
+        
+        
+        def _handle_parsing_error(error: Exception) -> str:
+            error_str = str(error)
+            
+            # If the LLM tried to do an Action and a Final Answer at the same time
+            if "both a final answer and a parse-able action" in error_str:
+                return (
+                    "FORMATTING ERROR: You provided BOTH an Action and a Final Answer. "
+                    "You must choose ONLY ONE. If you have the answer, use 'Thought:' followed by 'Final Answer:'."
+                )
+            
+            # Standard strict formatting reminder
+            return (
+                "CRITICAL FORMATTING ERROR. LangChain could not parse your response. "
+                "1. Remove ALL markdown headers (like ##) and bolding (**). "
+                "2. Ensure your keywords are exactly 'Thought:', 'Action:', 'Action Input:', or 'Final Answer:'.\n"
+                "Please try again using the exact unformatted keywords."
+            )
+        
+    
+        # 7. Assemble the Agent
+        langchain_agent = create_react_agent(self.reasoning_llm, tools, prompt)
+        agent_executor = AgentExecutor(
+            agent=langchain_agent,
+            tools=tools,
+            verbose=True, 
+            max_iterations=4,
+            handle_parsing_errors=_handle_parsing_error,
+            return_intermediate_steps=True
+        )
+        # 8. Run the Agent
+        try:
+            response = await run_in_threadpool(agent_executor.invoke, {"input": query})
+            return self._build_chat_response_payload(
+                response,
+                execute_analysis_history=tool_factory.get_execute_analysis_history(),
+            )
+        except Exception as e:
+            return {"error": str(e)}
+
+
+    def _build_chat_response_payload(
+        self,
+        response: Any,
+        execute_analysis_history: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        """Normalize LangChain executor output into the chat response contract."""
+        if not isinstance(response, dict):
+            return {
+                "answer": str(response),
+                "generated_code": None,
+                "execution_result": None,
+                "chart_data": None,
+            }
+
+        raw_output = response.get("output", "")
+        parsed_output = self._safe_parse_json(raw_output)
+
+        answer = ""
+        generated_code = None
+        execution_result = None
+        chart_data = None
+
+        if isinstance(parsed_output, dict):
+            answer = (
+                parsed_output.get("answer")
+                or parsed_output.get("final_answer")
+                or parsed_output.get("response")
+                or str(raw_output)
+            )
+            generated_code = parsed_output.get("generated_code")
+            execution_result = parsed_output.get("execution_result")
+            chart_data = parsed_output.get("chart_data")
+        else:
+            answer = str(raw_output)
+
+        if self._is_incomplete_agent_answer(answer):
+            answer = self._synthesize_answer_from_steps(
+                answer=answer,
+                steps=response.get("intermediate_steps"),
+            )
+
+        if not generated_code:
+            generated_code = self._extract_generated_code(
+                response.get("intermediate_steps"),
+                execute_analysis_history,
+            )
+
+        if execution_result is None:
+            execution_result = {
+                "raw_output": str(raw_output),
+                "intermediate_steps": self._serialize_intermediate_steps(response.get("intermediate_steps")),
+            }
+
+        if chart_data is None:
+            chart_data = self._extract_chart_data(
+                response.get("intermediate_steps"),
+                execute_analysis_history,
+            )
+
+        if chart_data is None:
+            preferred_result_data = self._extract_preferred_result_data(
+                response.get("intermediate_steps"),
+                execute_analysis_history,
+            )
+            chart_data = self._build_chart_from_result_data(preferred_result_data)
+
+        return {
+            "answer": answer.strip() if isinstance(answer, str) else str(answer),
+            "generated_code": generated_code,
+            "execution_result": execution_result,
+            "chart_data": chart_data,
+        }
+
+    def _safe_parse_json(self, value: Any) -> Any:
+        """Parse JSON from string responses when possible."""
+        if isinstance(value, (dict, list)):
+            return value
+        if not isinstance(value, str):
+            return None
+
+        text = value.strip()
+        if not text:
+            return None
+
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            return None
+
+    def _is_incomplete_agent_answer(self, answer: Any) -> bool:
+        """Detect generic LangChain stop messages that need fallback synthesis."""
+        if not isinstance(answer, str):
+            return True
+
+        normalized = answer.strip().lower()
+        if not normalized:
+            return True
+
+        return normalized in {
+            "agent stopped due to iteration limit or time limit.",
+            "agent stopped due to max iterations.",
+        }
+
+    def _synthesize_answer_from_steps(self, answer: str, steps: Any) -> str:
+        """Build a user-meaningful fallback answer from intermediate tool observations."""
+        serialized_steps = self._serialize_intermediate_steps(steps)
+        if not serialized_steps:
+            return answer
+
+        missing_column = None
+        latest_failure = None
+        latest_successful_analysis_summary = None
+        latest_successful_result = None
+        preferred_success_summary = None
+        preferred_success_result = None
+        for step in serialized_steps:
+            observation = str(step.get("observation", ""))
+            parsed_observation = self._safe_parse_json(observation)
+            task_text = str(step.get("tool_input") or "")
+            if isinstance(parsed_observation, dict):
+                task_text = str(parsed_observation.get("task") or task_text)
+            task_text_lower = task_text.lower()
+
+            is_meta_followup = (
+                "analyze the generated code" in task_text_lower
+                or "please note that i will wait" in task_text_lower
+                or "formatting" in task_text_lower
+            )
+
+            if isinstance(parsed_observation, dict) and parsed_observation.get("tool") == "execute_analysis":
+                if parsed_observation.get("status") == "success":
+                    latest_successful_analysis_summary = parsed_observation.get("summary")
+                    latest_successful_result = parsed_observation.get("result_data")
+                    if not is_meta_followup:
+                        preferred_success_summary = parsed_observation.get("summary")
+                        preferred_success_result = parsed_observation.get("result_data")
+                elif parsed_observation.get("status") == "error":
+                    latest_failure = parsed_observation.get("error") or latest_failure
+
+            missing_match = re.search(r"Column not found:\s*([A-Za-z0-9_ ]+)", observation)
+            if missing_match:
+                missing_column = missing_match.group(1).strip(" '\":.,")
+
+            missing_index_match = re.search(r"\['([^\]]+)'\]\s+not in index", observation)
+            if missing_index_match:
+                missing_column = missing_index_match.group(1).strip(" '\":.,")
+
+            if "Analysis failed" in observation or "Error:" in observation:
+                latest_failure = observation
+
+        if missing_column:
+            numeric_cols = self._get_numeric_analysis_columns()
+            categorical_cols = self._get_categorical_analysis_columns()
+            numeric_preview = ", ".join(numeric_cols[:3]) if numeric_cols else "none"
+            categorical_preview = ", ".join(categorical_cols[:3]) if categorical_cols else "none"
+            return (
+                f"I could not complete the exact request because column '{missing_column}' does not exist in this dataset. "
+                f"Available numeric columns include: {numeric_preview}. "
+                f"Available categorical columns include: {categorical_preview}. "
+                "If you want, I can proceed with a close alternative such as comparing Price and Stock by Category."
+            )
+
+        if preferred_success_summary:
+            result_tail = self._build_result_tail(preferred_success_result)
+            return f"{preferred_success_summary}{result_tail}"
+
+        if latest_successful_analysis_summary:
+            result_tail = self._build_result_tail(latest_successful_result)
+            return f"{latest_successful_analysis_summary}{result_tail}"
+
+        if latest_failure:
+            return f"I could not complete the analysis due to a tool execution error: {latest_failure}"
+
+        return answer
+
+    def _build_result_tail(self, result_data: Any) -> str:
+        """Create concise humanized details from structured result data."""
+        if not isinstance(result_data, dict):
+            return ""
+
+        result_type = result_data.get("type")
+        if result_type == "scalar":
+            return f" The computed value is {result_data.get('value')}."
+
+        if result_type == "series":
+            data = result_data.get("data") or {}
+            if isinstance(data, dict) and data:
+                top_items = list(data.items())[:5]
+                preview = "; ".join([f"{k}={v}" for k, v in top_items])
+                return f" Top values: {preview}."
+            return ""
+
+        if result_type == "dataframe":
+            rows = result_data.get("data") or []
+            if isinstance(rows, list) and rows:
+                first_row = rows[0]
+                if isinstance(first_row, dict):
+                    preview = "; ".join([f"{k}={v}" for k, v in list(first_row.items())[:4]])
+                    return f" First row: {preview}."
+            return ""
+
+        if result_type == "plotly_figure":
+            title = result_data.get("title") or "a chart"
+            return f" I also generated {title}."
+
+        return ""
+
+    def _get_categorical_analysis_columns(self) -> List[str]:
+        """Return categorical/text columns while staying compatible with pandas 2 and 3."""
+        if self.df is None or self.df.empty:
+            return []
+        return self.df.select_dtypes(include=['object', 'category', 'string']).columns.tolist()
+
+    def _serialize_intermediate_steps(self, steps: Any) -> List[Dict[str, Any]]:
+        """Convert LangChain intermediate step tuples into JSON-safe dicts."""
+        if not isinstance(steps, list):
+            return []
+
+        serialized_steps: List[Dict[str, Any]] = []
+        for step in steps:
+            if not isinstance(step, (list, tuple)) or len(step) < 2:
+                continue
+
+            action = step[0]
+            observation = step[1]
+            serialized_steps.append({
+                "tool": getattr(action, "tool", None),
+                "tool_input": getattr(action, "tool_input", None),
+                "log": getattr(action, "log", None),
+                "observation": observation,
+            })
+
+        return serialized_steps
+
+    def _extract_generated_code(
+        self,
+        steps: Any,
+        execute_analysis_history: Optional[List[Dict[str, Any]]] = None,
+    ) -> Optional[str]:
+        """Extract generated visualization code from tool observations when available."""
+        if execute_analysis_history:
+            for item in reversed(execute_analysis_history):
+                if item.get("status") == "success" and item.get("generated_code"):
+                    return str(item.get("generated_code"))
+
+        serialized_steps = self._serialize_intermediate_steps(steps)
+
+        # Prefer code from primary analysis tasks over meta follow-up retries.
+        for step in reversed(serialized_steps):
+            observation = step.get("observation")
+            parsed_observation = self._safe_parse_json(observation)
+
+            if not isinstance(parsed_observation, dict) or not parsed_observation.get("generated_code"):
+                continue
+
+            task_text = str(parsed_observation.get("task") or step.get("tool_input") or "").lower()
+            is_meta_followup = (
+                "analyze the generated code" in task_text
+                or "please note that i will wait" in task_text
+                or "formatting" in task_text
+            )
+            if not is_meta_followup:
+                return str(parsed_observation["generated_code"])
+
+        for step in reversed(serialized_steps):
+            parsed_observation = self._safe_parse_json(step.get("observation"))
+            if isinstance(parsed_observation, dict) and parsed_observation.get("generated_code"):
+                return str(parsed_observation["generated_code"])
+        return None
+
+    def _extract_chart_data(
+        self,
+        steps: Any,
+        execute_analysis_history: Optional[List[Dict[str, Any]]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Extract chart payload from tool observations when available."""
+        if execute_analysis_history:
+            for item in reversed(execute_analysis_history):
+                chart_payload = item.get("chart_data")
+                if item.get("status") == "success" and isinstance(chart_payload, dict):
+                    return chart_payload
+
+        serialized_steps = self._serialize_intermediate_steps(steps)
+
+        # Prefer chart payload from primary analysis tasks over meta follow-up retries.
+        for step in reversed(serialized_steps):
+            observation = step.get("observation")
+            parsed_observation = self._safe_parse_json(observation)
+
+            if not isinstance(parsed_observation, dict):
+                continue
+
+            task_text = str(parsed_observation.get("task") or step.get("tool_input") or "").lower()
+            is_meta_followup = (
+                "analyze the generated code" in task_text
+                or "please note that i will wait" in task_text
+                or "formatting" in task_text
+            )
+            if is_meta_followup:
+                continue
+
+            if parsed_observation.get("chart_data"):
+                return parsed_observation.get("chart_data")
+
+            result_data = parsed_observation.get("result_data")
+            if isinstance(result_data, dict) and result_data.get("chart_data"):
+                return result_data.get("chart_data")
+
+        for step in reversed(serialized_steps):
+            parsed_observation = self._safe_parse_json(step.get("observation"))
+            if not isinstance(parsed_observation, dict):
+                continue
+            if parsed_observation.get("chart_data"):
+                return parsed_observation.get("chart_data")
+            result_data = parsed_observation.get("result_data")
+            if isinstance(result_data, dict) and result_data.get("chart_data"):
+                return result_data.get("chart_data")
+        return None
+
+    def _extract_preferred_result_data(
+        self,
+        steps: Any,
+        execute_analysis_history: Optional[List[Dict[str, Any]]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Extract the most relevant successful structured result from execute_analysis steps."""
+        if execute_analysis_history:
+            fallback_result = None
+            for item in reversed(execute_analysis_history):
+                if item.get("status") != "success":
+                    continue
+                result_data = item.get("result_data")
+                if not isinstance(result_data, dict):
+                    continue
+
+                task_text = str(item.get("task") or "").lower()
+                is_meta_followup = (
+                    "analyze the generated code" in task_text
+                    or "please note that i will wait" in task_text
+                    or "formatting" in task_text
+                )
+
+                if not is_meta_followup:
+                    return result_data
+
+                if fallback_result is None:
+                    fallback_result = result_data
+
+            if fallback_result is not None:
+                return fallback_result
+
+        serialized_steps = self._serialize_intermediate_steps(steps)
+        fallback_result = None
+
+        for step in reversed(serialized_steps):
+            parsed_observation = self._safe_parse_json(step.get("observation"))
+            if not isinstance(parsed_observation, dict):
+                continue
+            if parsed_observation.get("tool") != "execute_analysis":
+                continue
+            if parsed_observation.get("status") != "success":
+                continue
+
+            result_data = parsed_observation.get("result_data")
+            if not isinstance(result_data, dict):
+                continue
+
+            task_text = str(parsed_observation.get("task") or step.get("tool_input") or "").lower()
+            is_meta_followup = (
+                "analyze the generated code" in task_text
+                or "please note that i will wait" in task_text
+                or "formatting" in task_text
+            )
+
+            if not is_meta_followup:
+                return result_data
+
+            if fallback_result is None:
+                fallback_result = result_data
+
+        return fallback_result
+
+    def _build_chart_from_result_data(self, result_data: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """Build a basic chart payload from structured results when no figure was explicitly returned."""
+        if not isinstance(result_data, dict):
+            return None
+
+        result_type = result_data.get("type")
+
+        if result_type == "series":
+            data = result_data.get("data") or {}
+            if not isinstance(data, dict) or not data:
+                return None
+
+            top_items = list(data.items())[:10]
+            x_values = [str(item[0]) for item in top_items]
+            y_values = [item[1] for item in top_items]
+            metric_name = str(result_data.get("name") or "Value")
+
+            return {
+                "data": [
+                    {
+                        "type": "bar",
+                        "x": x_values,
+                        "y": y_values,
+                    }
+                ],
+                "layout": {
+                    "title": f"Top {len(top_items)} by {metric_name}",
+                    "xaxis": {"title": "Item"},
+                    "yaxis": {"title": metric_name},
+                    "margin": {"t": 50, "b": 100, "l": 60, "r": 20},
+                },
+            }
+
+        if result_type == "dataframe":
+            rows = result_data.get("data") or []
+            if not isinstance(rows, list) or not rows:
+                return None
+
+            frame = pd.DataFrame(rows)
+            if frame.empty:
+                return None
+
+            numeric_cols = frame.select_dtypes(include=["number"]).columns.tolist()
+            if not numeric_cols:
+                return None
+
+            y_col = numeric_cols[0]
+            candidate_x = [col for col in frame.columns if col != y_col]
+            x_col = candidate_x[0] if candidate_x else None
+
+            plot_df = frame.head(10)
+            x_values = (
+                plot_df[x_col].astype(str).tolist()
+                if x_col is not None
+                else [str(idx + 1) for idx in range(len(plot_df))]
+            )
+
+            return {
+                "data": [
+                    {
+                        "type": "bar",
+                        "x": x_values,
+                        "y": plot_df[y_col].tolist(),
+                    }
+                ],
+                "layout": {
+                    "title": f"Top {len(plot_df)} by {y_col}",
+                    "xaxis": {"title": x_col or "Row"},
+                    "yaxis": {"title": y_col},
+                    "margin": {"t": 50, "b": 100, "l": 60, "r": 20},
+                },
+            }
+
+        return None
+
+    async def _analyze_dataset_kpi(self) -> Dict[str, Any]:
         """Run AI dataset analysis."""
         safe_fallback_visuals = self._build_fallback_visual_recommendations(limit=15) or self._build_minimum_safe_visual_recommendations(limit=15)
 
@@ -233,7 +792,7 @@ class DataAnalystAgent:
         available_columns = ""
         if self.df is not None:
             numeric_cols = self._get_numeric_analysis_columns()
-            categorical_cols = self.df.select_dtypes(include=['object', 'category']).columns.tolist()
+            categorical_cols = self._get_categorical_analysis_columns()
             datetime_cols = self._infer_datetime_columns()
             
             # CRITICAL: Strip out IDs and Indexes before they reach the LLM
@@ -518,7 +1077,7 @@ class DataAnalystAgent:
             return []
 
         numeric_cols = self._get_numeric_analysis_columns()
-        categorical_cols = self.df.select_dtypes(include=['object', 'category']).columns.tolist()
+        categorical_cols = self._get_categorical_analysis_columns()
         datetime_cols = self._infer_datetime_columns()
 
         categorical_cols = [
@@ -863,7 +1422,7 @@ class DataAnalystAgent:
 
         numeric_cols = self._get_numeric_analysis_columns()
         categorical_cols = [
-            col for col in self.df.select_dtypes(include=['object', 'category']).columns.tolist()
+            col for col in self._get_categorical_analysis_columns()
             if not self._is_identifier_like_column(col)
         ]
 
@@ -968,3 +1527,9 @@ class DataAnalystAgent:
 
 if __name__ == "__main__":
     logger.info("DataAnalystAgent module loaded. Use app entrypoints to run analysis workflows.")
+    
+    df = pd.read_csv("/Users/rwk3030/Downloads/products-100.csv")
+    agent = DataAnalystAgent(df=df)
+    result = asyncio.run(agent.analysis("Top 10 products by rating", conversation_memory=[]))
+    print(json.dumps(result, indent=2, default=str))
+    

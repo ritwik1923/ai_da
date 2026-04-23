@@ -97,10 +97,21 @@ def safe_execute_pandas_code(code: str, df: pd.DataFrame) -> Dict[str, Any]:
             title_text = None
             if result.layout and result.layout.title:
                 title_text = result.layout.title.text
+
+            # Preserve full figure payload so API callers can render charts directly.
+            chart_payload = result.to_plotly_json()
+
+            # Plotly template metadata is very large and not required for frontend rendering.
+            if isinstance(chart_payload, dict):
+                layout = chart_payload.get('layout')
+                if isinstance(layout, dict):
+                    layout.pop('template', None)
+
             return {
                 'type': 'plotly_figure',
                 'trace_count': len(result.data),
-                'title': title_text
+                'title': title_text,
+                'chart_data': chart_payload,
             }
         elif isinstance(result, (dict, list)):
             return {'type': 'collection', 'data': result}

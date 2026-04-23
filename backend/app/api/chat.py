@@ -90,7 +90,7 @@ async def send_message(
         # Use a specific timeout for local LLMs
         try:
             # ASYNC AWAIT is critical here to keep FastAPI responsive
-            result = await ai_engg(df=df).analyze(query=request.message,history=conversation_memory)
+            result = await ai_engg(df=df).analysis(query=request.message,conversation_memory=conversation_memory)
         except asyncio.TimeoutError:
             raise HTTPException(status_code=504, detail="AI Brain timed out.")
         # 1. SAFETY CHECK: Catch the None object before it crashes the DB insertion
