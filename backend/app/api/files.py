@@ -8,7 +8,7 @@ import uuid
 from starlette.concurrency import run_in_threadpool
 
 from app.core.database import get_db
-from app.core.config import settings
+from app.core.config import settings, resolve_upload_path
 from app.models.models import UploadedFile
 from app.schemas.schemas import FileUploadResponse
 
@@ -23,7 +23,7 @@ def _read_dataframe(file_ext: str, file_path: str) -> pd.DataFrame:
     raise ValueError("Unsupported file format")
 
 # Ensure upload directory exists
-Path(settings.UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
+Path(resolve_upload_path(settings.UPLOAD_DIR)).mkdir(parents=True, exist_ok=True)
 
 
 @router.post("/upload", response_model=FileUploadResponse)
@@ -56,7 +56,7 @@ async def upload_file(
     # Generate unique filename
     unique_filename = f"{uuid.uuid4()}{file_ext}"
     # TODO : save the files in remote storage like S3, GCP, Azure Blob Storage etc.
-    file_path = os.path.join(settings.UPLOAD_DIR, unique_filename)
+    file_path = resolve_upload_path(os.path.join(settings.UPLOAD_DIR, unique_filename))
     
     # Save file
     with open(file_path, "wb") as f:
@@ -135,8 +135,9 @@ async def delete_file(file_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="File not found")
     
     # Delete physical file
-    if os.path.exists(file.file_path):
-        os.remove(file.file_path)
+    resolved_path = resolve_upload_path(file.file_path)
+    if os.path.exists(resolved_path):
+        os.remove(resolved_path)
     
     # Delete database record
     db.delete(file)
@@ -157,9 +158,9 @@ async def preview_file(file_id: int, limit: int = 10, db: Session = Depends(get_
     try:
         # Load data
         if file.file_type == '.csv':
-            df = pd.read_csv(file.file_path)
+            df = pd.read_csv(resolve_upload_path(file.file_path))
         else:
-            df = pd.read_excel(file.file_path)
+            df = pd.read_excel(resolve_upload_path(file.file_path))
         
         return {
             "columns": list(df.columns),

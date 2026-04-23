@@ -1,6 +1,17 @@
 from pydantic_settings import BaseSettings
 from typing import List, Union
 from pydantic import field_validator
+from pathlib import Path
+
+
+BACKEND_DIR = Path(__file__).resolve().parents[2]
+
+
+def resolve_upload_path(file_path: str) -> str:
+    path = Path(file_path)
+    if path.is_absolute():
+        return str(path)
+    return str((BACKEND_DIR / path).resolve())
 
 
 class Settings(BaseSettings):
@@ -43,7 +54,7 @@ class Settings(BaseSettings):
         return v
     
     # File Upload
-    UPLOAD_DIR: str = "./uploads"
+    UPLOAD_DIR: str = str(BACKEND_DIR / "uploads")
     MAX_FILE_SIZE: int = 10 * 1024 * 1024  # 10MB
     ALLOWED_EXTENSIONS: Union[List[str], str] = ".csv,.xlsx,.xls"
     

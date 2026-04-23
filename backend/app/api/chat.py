@@ -5,6 +5,7 @@ import uuid, json, asyncio
 from datetime import datetime
 from starlette.concurrency import run_in_threadpool
 
+from app.core.config import resolve_upload_path
 from app.core.database import get_db
 from app.models.models import Conversation, Message, UploadedFile
 from app.schemas.schemas import ChatRequest, ChatResponse, ConversationHistory, ChatMessage, FeedbackRequest
@@ -68,7 +69,7 @@ async def send_message(
             if not file:
                 raise HTTPException(status_code=404, detail="File not found")
             
-            df = await run_in_threadpool(_load_dataframe, file.file_type, file.file_path)
+            df = await run_in_threadpool(_load_dataframe, file.file_type, resolve_upload_path(file.file_path))
         
         if df is None:
             raise HTTPException(

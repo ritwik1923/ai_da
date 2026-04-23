@@ -11,9 +11,7 @@ from app.core.config import settings
 from app.core.database import engine, get_db
 from app.models import models
 from app.api import chat, files, analysis
-
-# 1. FIX: Import AgentGlobals from your v3 agent file
-# from backend.app.agents.extra.data_analyst_v3 import AgentGlobals
+from app.agents.utility.AgentGlobals import AgentGlobals
 
 logger = logging.getLogger(__name__)
 
