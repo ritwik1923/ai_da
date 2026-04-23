@@ -14,7 +14,6 @@ from app.core.config import settings
 from app.models.models import UploadedFile
 from app.schemas.schemas import FileUploadResponse, KPIResponse, DataQualityInsight, AnalysisInsight
 from app.agents.DataAnalystAgent import DataAnalystAgent as ai_engg
-from app.utils.chart_generator import generate_chart
 
 router = APIRouter()
 
@@ -205,6 +204,7 @@ async def get_file_kpis(file_id: int, db: Session = Depends(get_db)):
         return KPIResponse(
             file_id=file_id,
             summary=kpi_data['summary'],
+            data_profiling=kpi_data.get('data_profiling'),
             metrics=kpi_data['metrics'],
             charts=kpi_data['charts'],
             top_categories=kpi_data['top_categories'],
