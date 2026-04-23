@@ -37,6 +37,7 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     """Response schema for chat"""
     session_id: str
+    message_id: int
     response: str
     generated_code: Optional[str] = None
     execution_result: Optional[Dict[str, Any]] = None
@@ -75,3 +76,56 @@ class ErrorResponse(BaseModel):
     error: str
     detail: Optional[str] = None
     code: Optional[str] = None
+
+
+class KPIStat(BaseModel):
+    label: str
+    value: str
+
+
+class KPIChart(BaseModel):
+    title: str
+    data: Dict[str, Any]
+
+
+class DataQualityInsight(BaseModel):
+    metric: str
+    status: str  # 'good', 'warning', 'critical'
+    description: str
+
+
+class AnalysisInsight(BaseModel):
+    title: str
+    description: str
+    key_findings: List[str]
+    recommendations: List[str]
+
+
+class VisualRecommendation(BaseModel):
+    title: str
+    description: str
+    suggested_query: str
+    generated_code: Optional[str] = None
+    chart_data: Optional[Dict[str, Any]] = None
+
+
+class KPIResponse(BaseModel):
+    file_id: int
+    summary: Dict[str, Any]
+    data_profiling: Optional[Dict[str, Any]] = None
+    metrics: List[KPIStat]
+    charts: List[KPIChart]
+    top_categories: Optional[List[Dict[str, Any]]] = None
+    date_insights: Optional[List[str]] = None
+    # AI-powered detailed analysis
+    data_quality: Optional[List[DataQualityInsight]] = None
+    analysis_insights: Optional[List[AnalysisInsight]] = None
+    ai_summary: Optional[str] = None
+    key_metrics: Optional[List[str]] = None
+    visual_recommendations: Optional[List[VisualRecommendation]] = None
+
+
+class FeedbackRequest(BaseModel):
+    message_id: int # The ID of the assistant's message
+    is_positive: bool # True for 👍, False for 👎
+    comments: Optional[str] = None

@@ -1,0 +1,25 @@
+test_cases:
+  # Level 1: Basic Retrieval & Distribution
+  - file: "/Users/rwk3030/Downloads/mental_health_lifestyle_2000.csv"
+    tasks:
+      # query: "Generate a chart showing the relationship between smoking, alcohol consumption, and anxiety levels."
+      # query: "This scatter plot compares daily screen time across different age groups and genders to identify trends and correlations."
+      # query: "Show the distribution of stress levels among different income brackets to uncover potential socioeconomic patterns."
+      # query: "Compare the average hours of sleep per night across various professions to identify any significant differences."
+      # query: "Analyze the correlation between exercise frequency and reported happiness levels to explore potential well-being insights."
+      # query: "This bar chart displays the distribution of stress levels across different occupations to identify patterns and trends."
+      query: "Show the relationship between hours of sleep and stress levels to uncover potential insights into sleep quality and mental health."
+      # query: "Compare the average screen time across different age groups to identify trends in digital consumption."
+      # query: "Analyze the correlation between alcohol consumption and reported happiness levels to explore potential well-being insights."
+      # query: "This scatter plot compares daily screen time across different age groups and genders to identify trends and correlations."
+      # query: "This bar chart displays the distribution of stress levels across different occupations to identify patterns and trends."
+      query: "Show the relationship between hours of sleep and stress levels to uncover potential insights into sleep quality and mental health."
+      # query: "Compare the average screen time across different age groups to identify trends in digital consumption."
+      # query: "Analyze the correlation between alcohol consumption and reported happiness levels to explore potential well-being insights."
+      query: "screentime on stress and depression levels"
+      query: "alcohol consumption on stress and depression levels"
+      query: "exercise frequency on stress and depression levels"
+      query: "income level on stress and depression levels"
+      query: "hours of sleep on stress and depression levels"
+
+    

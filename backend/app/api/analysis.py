@@ -3,13 +3,25 @@ from sqlalchemy.orm import Session
 import pandas as pd
 from datetime import datetime
 import time
+from starlette.concurrency import run_in_threadpool
 
 from app.core.database import get_db
 from app.models.models import UploadedFile, AnalysisResult
 from app.schemas.schemas import AnalysisRequest, AnalysisResponse
-from app.agents.data_analyst import DataAnalystAgent
+# from backend.app.agents.extra.data_analyst_v3 import DataAnalystAgent
 
 router = APIRouter()
+
+
+def _load_dataframe(file_type: str, file_path: str) -> pd.DataFrame:
+    if file_type == '.csv':
+        return pd.read_csv(file_path)
+    return pd.read_excel(file_path)
+
+
+# def _run_agent_analysis(df: pd.DataFrame, query: str):
+#     agent = DataAnalystAgent(df)
+#     return agent.analyze(query)
 
 
 @router.post("/analyze", response_model=AnalysisResponse)
@@ -27,18 +39,12 @@ async def analyze_data(
         raise HTTPException(status_code=404, detail="File not found")
     
     try:
-        # Load dataframe
-        if file.file_type == '.csv':
-            df = pd.read_csv(file.file_path)
-        else:
-            df = pd.read_excel(file.file_path)
+        df = await run_in_threadpool(_load_dataframe, file.file_type, file.file_path)
         
         # Measure execution time
         start_time = time.time()
         
-        # Create agent and analyze (no memory)
-        agent = DataAnalystAgent(df)
-        result = agent.analyze(request.query)
+        result = await run_in_threadpool(_run_agent_analysis, df, request.query)
         
         execution_time = int((time.time() - start_time) * 1000)  # milliseconds
         
