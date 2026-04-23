@@ -112,6 +112,7 @@ class VisualRecommendation(BaseModel):
 class KPIResponse(BaseModel):
     file_id: int
     summary: Dict[str, Any]
+    data_profiling: Optional[Dict[str, Any]] = None
     metrics: List[KPIStat]
     charts: List[KPIChart]
     top_categories: Optional[List[Dict[str, Any]]] = None

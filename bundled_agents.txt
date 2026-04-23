@@ -378,7 +378,6 @@ from app.core.config import settings
 from app.models.models import UploadedFile
 from app.schemas.schemas import FileUploadResponse, KPIResponse, DataQualityInsight, AnalysisInsight
 from app.agents.DataAnalystAgent import DataAnalystAgent as ai_engg
-from app.utils.chart_generator import generate_chart
 
 router = APIRouter()
 
@@ -569,6 +568,7 @@ async def get_file_kpis(file_id: int, db: Session = Depends(get_db)):
         return KPIResponse(
             file_id=file_id,
             summary=kpi_data['summary'],
+            data_profiling=kpi_data.get('data_profiling'),
             metrics=kpi_data['metrics'],
             charts=kpi_data['charts'],
             top_categories=kpi_data['top_categories'],
@@ -765,6 +765,167 @@ if __name__ == "__main__":
     asyncio.run(suite.execute(FILE_PATH))-e 
 
 
+--- File: backend/test/rwk_test_kpi.py ---
+import json
+import requests
+import logging
+import os
+import time
+from datetime import datetime
+import yaml
+
+# --- Configuration ---
+BASE_URL = "http://localhost:8000/kpi"
+FILE_PATH = "/Users/rwk3030/Downloads/products-100.csv"
+JSON_FILE = "test_suites.json"
+# Get the absolute path of the directory containing this script (the 'test' folder)
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Construct the absolute path to the YAML file
+YML_FILE = os.path.join(CURRENT_DIR, "test_suites.yml")
+MAX_RETRIES = 5
+LOG_DIR = "logs"
+MAX_FAILED_ALLOWED = 5
+
+# Logger Setup
+timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+log_filename = os.path.join(LOG_DIR, f"suite_run_{timestamp}.log")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", 
+                    handlers=[logging.FileHandler(log_filename), logging.StreamHandler()])
+logger = logging.getLogger(__name__)
+
+def load_test_cases_json(file_path):
+    """Loads cases from JSON file"""
+    try:
+        with open(file_path, 'r') as f:
+            data = json.load(f)
+            return data.get("test_cases", [])
+    except FileNotFoundError:
+        logger.error(f"❌ JSON file not found at {file_path}")
+        return []
+    except json.JSONDecodeError:
+        logger.error(f"❌ Failed to decode JSON. Check syntax in {file_path}")
+        return []
+
+def load_test_cases(file_path):
+    """Loads cases from YAML file safely"""
+    try:
+        with open(file_path, 'r') as f:
+            data = yaml.safe_load(f)
+            cases = data.get("test_cases", [])
+            logger.info(f"📦 Loaded {len(cases)} test cases from {file_path}")
+            return cases
+    except Exception as e:
+        logger.error(f"❌ Failed to load YAML: {e}")
+        return []
+
+def call_rag_api(message, session_id, file_id):
+    payload = {"session_id": session_id, "message": message, "file_id": file_id}
+    try:
+        response = requests.post(f"{BASE_URL}/chat/message", json=payload, timeout=90)
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        logger.error(f"API Error: {e}")
+        return {}
+
+def send_feedback(message_id, is_positive):
+    """Sends feedback to trigger continuous learning in the backend."""
+    payload = {
+        "message_id": message_id,
+        "is_positive": is_positive,
+        "comments": "Automated test suite validation"
+    }
+    try:
+        response = requests.post(f"{BASE_URL}/chat/feedback", json=payload, timeout=10)
+        response.raise_for_status()
+        logger.info(f"🎓 Feedback submitted for message ID {message_id} -> AI learned successfully!")
+        return True
+    except Exception as e:
+        logger.error(f"⚠️ Failed to submit feedback for message ID {message_id}: {e}")
+        return False
+
+def run_automated_suite():
+    # 1. Load Data
+    test_cases = load_test_cases(YML_FILE)
+    if not test_cases:
+        return
+
+    logger.info(f"🚀 Loaded {len(test_cases)} test cases from {YML_FILE}")
+
+    # 2. Upload File Once
+    try:
+        with open(FILE_PATH, "rb") as f:
+            resp = requests.post(f"{BASE_URL}/files/upload", files={"file": f})
+            file_id = resp.json()["id"]
+            logger.info(f"✅ Data uploaded. ID: {file_id}")
+    except Exception as e:
+        logger.error(f"❌ Upload failed: {e}")
+        return
+
+    stats = {"passed": 0, "failed": 0}
+    list_faided_cases = []
+    
+    # 3. Process Cases
+    for case in test_cases:
+        logger.info(f"\n--- [ID {case['id']}] Starting ---")
+        session_id = f"suite_{timestamp}_{case['id']}"
+        current_msg = case['query']
+        case_passed = False
+        start_time = time.time()
+        for n in range(1, MAX_RETRIES + 1):
+            logger.info(f"Attempt {n}: Sending query...")
+            data = call_rag_api(current_msg, session_id, file_id)
+            print(f"data\t\t\n{data}\n")
+            answer = str(data.get("response", ""))
+            code = str(data.get("generated_code", ""))
+            message_id = data.get("message_id")  # Extract the newly added message_id
+
+            # Validation logic
+            value_match = case["expected_val"].lower() in answer.lower()
+
+            if value_match:
+                logger.info(f"✅ Success on attempt {n}")
+                stats["passed"] += 1
+                case_passed = True
+                
+                # TRIGGER LEARNING: Send positive feedback to the backend
+                if message_id:
+                    send_feedback(message_id, is_positive=True)
+                else:
+                    logger.warning("⚠️ Success, but no message_id returned to send feedback.")
+                break
+            else:
+                logger.warning(f"⚠️ Attempt {n} incorrect. Retrying...\n Query: {case['query']}\nAnswer: {answer}\nCode: {code} \nExpected Value: {case['expected_val']}")
+                
+                current_msg = f"Your answer was wrong. Please re-read the question and provide a correct response.\nQuery: {case['query']}\nAnswer: {answer} \nExpected Value: {case['expected_val']}"
+
+        end_time = time.time()
+        elapsed_time = end_time - start_time
+        logger.info(f"⏱️ execution time for task \'{current_msg}\' : {elapsed_time:.2f} seconds")
+        
+        if not case_passed:
+            logger.error(f"❌ FAILED after {MAX_RETRIES} attempts.")
+            stats["failed"] += 1
+            list_faided_cases.append(case)
+
+        if stats["failed"] > MAX_FAILED_ALLOWED:
+            logger.error(f"❌ Stopping suite due to failure limit.")
+            break
+        
+
+    logger.info(f"\nFINISH: Passed {stats['passed']} | Failed {stats['failed']}")
+    logger.info(f"\nFailed Cases: {[case['id'] for case in list_faided_cases]}")
+
+
+if __name__ == "__main__":
+    start_time = time.time()
+    run_automated_suite()
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    logger.info(f"⏱️ Total execution time: {elapsed_time:.2f} seconds")-e 
+
+
 --- File: backend/test/rwk_test.py ---
 import json
 import requests
@@ -926,165 +1087,58 @@ if __name__ == "__main__":
     logger.info(f"⏱️ Total execution time: {elapsed_time:.2f} seconds")-e 
 
 
---- File: backend/test/rwk_test_kpi.py ---
-import json
-import requests
-import logging
-import os
-import time
-from datetime import datetime
-import yaml
+--- File: backend/test/test_chart_generator.py ---
+import pandas as pd
 
-# --- Configuration ---
-BASE_URL = "http://localhost:8000/kpi"
-FILE_PATH = "/Users/rwk3030/Downloads/products-100.csv"
-JSON_FILE = "test_suites.json"
-# Get the absolute path of the directory containing this script (the 'test' folder)
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-
-# Construct the absolute path to the YAML file
-YML_FILE = os.path.join(CURRENT_DIR, "test_suites.yml")
-MAX_RETRIES = 5
-LOG_DIR = "logs"
-MAX_FAILED_ALLOWED = 5
-
-# Logger Setup
-timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-log_filename = os.path.join(LOG_DIR, f"suite_run_{timestamp}.log")
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", 
-                    handlers=[logging.FileHandler(log_filename), logging.StreamHandler()])
-logger = logging.getLogger(__name__)
-
-def load_test_cases_json(file_path):
-    """Loads cases from JSON file"""
-    try:
-        with open(file_path, 'r') as f:
-            data = json.load(f)
-            return data.get("test_cases", [])
-    except FileNotFoundError:
-        logger.error(f"❌ JSON file not found at {file_path}")
-        return []
-    except json.JSONDecodeError:
-        logger.error(f"❌ Failed to decode JSON. Check syntax in {file_path}")
-        return []
-
-def load_test_cases(file_path):
-    """Loads cases from YAML file safely"""
-    try:
-        with open(file_path, 'r') as f:
-            data = yaml.safe_load(f)
-            cases = data.get("test_cases", [])
-            logger.info(f"📦 Loaded {len(cases)} test cases from {file_path}")
-            return cases
-    except Exception as e:
-        logger.error(f"❌ Failed to load YAML: {e}")
-        return []
-
-def call_rag_api(message, session_id, file_id):
-    payload = {"session_id": session_id, "message": message, "file_id": file_id}
-    try:
-        response = requests.post(f"{BASE_URL}/chat/message", json=payload, timeout=90)
-        response.raise_for_status()
-        return response.json()
-    except Exception as e:
-        logger.error(f"API Error: {e}")
-        return {}
-
-def send_feedback(message_id, is_positive):
-    """Sends feedback to trigger continuous learning in the backend."""
-    payload = {
-        "message_id": message_id,
-        "is_positive": is_positive,
-        "comments": "Automated test suite validation"
-    }
-    try:
-        response = requests.post(f"{BASE_URL}/chat/feedback", json=payload, timeout=10)
-        response.raise_for_status()
-        logger.info(f"🎓 Feedback submitted for message ID {message_id} -> AI learned successfully!")
-        return True
-    except Exception as e:
-        logger.error(f"⚠️ Failed to submit feedback for message ID {message_id}: {e}")
-        return False
-
-def run_automated_suite():
-    # 1. Load Data
-    test_cases = load_test_cases(YML_FILE)
-    if not test_cases:
-        return
-
-    logger.info(f"🚀 Loaded {len(test_cases)} test cases from {YML_FILE}")
-
-    # 2. Upload File Once
-    try:
-        with open(FILE_PATH, "rb") as f:
-            resp = requests.post(f"{BASE_URL}/files/upload", files={"file": f})
-            file_id = resp.json()["id"]
-            logger.info(f"✅ Data uploaded. ID: {file_id}")
-    except Exception as e:
-        logger.error(f"❌ Upload failed: {e}")
-        return
-
-    stats = {"passed": 0, "failed": 0}
-    list_faided_cases = []
-    
-    # 3. Process Cases
-    for case in test_cases:
-        logger.info(f"\n--- [ID {case['id']}] Starting ---")
-        session_id = f"suite_{timestamp}_{case['id']}"
-        current_msg = case['query']
-        case_passed = False
-        start_time = time.time()
-        for n in range(1, MAX_RETRIES + 1):
-            logger.info(f"Attempt {n}: Sending query...")
-            data = call_rag_api(current_msg, session_id, file_id)
-            print(f"data\t\t\n{data}\n")
-            answer = str(data.get("response", ""))
-            code = str(data.get("generated_code", ""))
-            message_id = data.get("message_id")  # Extract the newly added message_id
-
-            # Validation logic
-            value_match = case["expected_val"].lower() in answer.lower()
-
-            if value_match:
-                logger.info(f"✅ Success on attempt {n}")
-                stats["passed"] += 1
-                case_passed = True
-                
-                # TRIGGER LEARNING: Send positive feedback to the backend
-                if message_id:
-                    send_feedback(message_id, is_positive=True)
-                else:
-                    logger.warning("⚠️ Success, but no message_id returned to send feedback.")
-                break
-            else:
-                logger.warning(f"⚠️ Attempt {n} incorrect. Retrying...\n Query: {case['query']}\nAnswer: {answer}\nCode: {code} \nExpected Value: {case['expected_val']}")
-                
-                current_msg = f"Your answer was wrong. Please re-read the question and provide a correct response.\nQuery: {case['query']}\nAnswer: {answer} \nExpected Value: {case['expected_val']}"
-
-        end_time = time.time()
-        elapsed_time = end_time - start_time
-        logger.info(f"⏱️ execution time for task \'{current_msg}\' : {elapsed_time:.2f} seconds")
-        
-        if not case_passed:
-            logger.error(f"❌ FAILED after {MAX_RETRIES} attempts.")
-            stats["failed"] += 1
-            list_faided_cases.append(case)
-
-        if stats["failed"] > MAX_FAILED_ALLOWED:
-            logger.error(f"❌ Stopping suite due to failure limit.")
-            break
-        
-
-    logger.info(f"\nFINISH: Passed {stats['passed']} | Failed {stats['failed']}")
-    logger.info(f"\nFailed Cases: {[case['id'] for case in list_faided_cases]}")
+from app.utils.chart_generator import generate_chart_from_query
 
 
-if __name__ == "__main__":
-    start_time = time.time()
-    run_automated_suite()
-    end_time = time.time()
-    elapsed_time = end_time - start_time
-    logger.info(f"⏱️ Total execution time: {elapsed_time:.2f} seconds")-e 
+def test_relationship_query_uses_aggregated_category_scatter():
+    df = pd.DataFrame(
+        {
+            "Category": ["A", "A", "B", "B", "C", "C"],
+            "Price": [100, 120, 200, 220, 300, 330],
+            "Stock": [10, 12, 20, 18, 30, 28],
+            "Name": ["p1", "p2", "p3", "p4", "p5", "p6"],
+        }
+    )
+
+    chart = generate_chart_from_query(df, "Show the relationship between price and stock by category")
+
+    assert chart is not None
+    assert chart["type"] == "scatter"
+
+    figure_data = chart["data"]
+    trace_names = {trace.get("name") for trace in figure_data.get("data", [])}
+    assert trace_names == {"A", "B", "C"}
+
+    for trace in figure_data.get("data", []):
+        assert len(trace.get("x", [])) == 1
+        assert len(trace.get("y", [])) == 1
+        assert trace.get("text")
+
+    title_text = figure_data.get("layout", {}).get("title", {}).get("text", "")
+    assert "average stock" in title_text.lower()
+    assert "average price" in title_text.lower()
+    assert "category" in title_text.lower()
+
+
+def test_price_distribution_by_category_defaults_to_top_10_ranked_bar():
+    df = pd.DataFrame(
+        {
+            "Category": [f"C{i}" for i in range(12)],
+            "Price": [10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120],
+        }
+    )
+
+    chart = generate_chart_from_query(df, "Price Distribution by Category")
+
+    assert chart is not None
+    assert chart["type"] == "bar"
+    figure_data = chart["data"]
+    trace = figure_data["data"][0]
+    assert len(trace.get("x", [])) == 10
+    assert figure_data.get("layout", {}).get("title", {}).get("text", "").lower().startswith("top 10")-e 
 
 
 --- File: backend/test/test_kpi_suite.py ---
@@ -1505,6 +1559,80 @@ def main():
 if __name__ == "__main__":
     main()
 -e 
+
+
+--- File: backend/test/test_visualisation_tool.py ---
+import pandas as pd
+
+from app.agents.utility.FewShotExampleStore import Visualization_FewShotExampleStore
+from app.agents.utility.AnalysisToolFactory import AnalysisToolFactory
+from app.agents.DataAnalystAgent import DataAnalystAgent
+
+
+class DummyCodeService:
+    def __init__(self):
+        self.last_task = None
+
+    def generate_visualization_code(self, task, top_n=10):
+        self.last_task = (task, top_n)
+        return {
+            "success": True,
+            "code": "result = 'ok'",
+            "examples": "Similar Task: Price Distribution by Category",
+            "top_n": top_n,
+        }
+
+    def generate_and_execute(self, task):
+        return {"success": True, "result": task, "code": "result = 1"}
+
+
+class DummyPassport:
+    def to_prompt_context(self):
+        return "schema"
+
+
+def test_visualization_store_has_price_distribution_golden_example():
+    example = next(
+        item for item in Visualization_FewShotExampleStore.visualization_golden_examples
+        if item["task"] == "Price Distribution by Category"
+    )
+
+    assert example["chart_family"] == "ranked_horizontal_bar"
+    assert "Aggregate price by category" in example["template"]
+    assert "top 10" in example["rationale"].lower()
+    assert "Top 10 Categories by Total Price" in example["code"]
+
+
+def test_visualisation_tool_returns_rag_examples():
+    factory = AnalysisToolFactory(DummyPassport(), DummyCodeService(), pd.DataFrame({"Price": [1, 2]}))
+    tools = {tool.name: tool for tool in factory.create_tools()}
+
+    payload = tools["visualisation_tool"].func("Price Distribution by Category")
+
+    assert "visualisation_tool" in payload
+    assert "Similar Task: Price Distribution by Category" in payload
+
+
+def test_visualization_plan_covers_major_families():
+    agent = DataAnalystAgent.__new__(DataAnalystAgent)
+    agent.df = pd.DataFrame(
+        {
+            "Category": ["A", "B", "A", "C"],
+            "Region": ["North", "South", "East", "West"],
+            "OrderDate": ["2025-01-01", "2025-01-02", "2025-01-03", "2025-01-04"],
+            "Price": [10, 20, 30, 40],
+            "Stock": [4, 5, 6, 7],
+        }
+    )
+
+    plan = agent.build_visualization_plan()
+    families = {item["family"] for item in plan}
+    fallback = agent.build_fallback_visual_recommendations()
+
+    assert {"ranking", "relationship", "trend", "distribution", "breakdown"}.issubset(families)
+    assert fallback is not None
+    queries = [item["suggested_query"] for item in fallback]
+    assert len(queries) == len(set(queries))-e 
 
 
 --- File: backend/requirements.txt ---

@@ -1,6 +1,24 @@
 import api from './api';
 import { UploadedFile, ChatRequest, ChatResponse, ConversationHistory, FilePreview, KPIResponse } from '../types';
 
+type BackendColumn = string | { name?: string; dtype?: string };
+
+function normalizeUploadedFile(file: any): UploadedFile {
+  const rawColumns: BackendColumn[] = Array.isArray(file?.columns) ? file.columns : [];
+  const columns = rawColumns
+    .map((col) => {
+      if (typeof col === 'string') return col;
+      if (col && typeof col === 'object' && typeof col.name === 'string') return col.name;
+      return '';
+    })
+    .filter((col): col is string => Boolean(col));
+
+  return {
+    ...file,
+    columns,
+  } as UploadedFile;
+}
+
 export const chatService = {
   // Send a message
   sendMessage: async (request: ChatRequest): Promise<ChatResponse> => {
@@ -43,13 +61,15 @@ export const fileService = {
   // Get all files
   getFiles: async (): Promise<UploadedFile[]> => {
     const response = await api.get('/api/files');
-    return response.data;
+    return Array.isArray(response.data)
+      ? response.data.map((file) => normalizeUploadedFile(file))
+      : [];
   },
 
   // Get file details
   getFile: async (fileId: number): Promise<UploadedFile> => {
     const response = await api.get(`/api/files/${fileId}`);
-    return response.data;
+    return normalizeUploadedFile(response.data);
   },
 
   // Delete file

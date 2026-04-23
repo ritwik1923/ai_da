@@ -45,7 +45,7 @@ class ChartGenerationError(Exception):
 class SafePlotlyExpress:
     """Proxy for plotly.express with go-based fallbacks for pandas/plotly grouping issues."""
 
-    _WRAPPED_METHODS = {"bar", "scatter", "line", "histogram", "pie"}
+    _WRAPPED_METHODS = {"bar", "scatter", "scatter_3d", "line", "histogram", "pie"}
 
     def __init__(self, plotly_express_module):
         self._px = plotly_express_module
@@ -83,6 +83,9 @@ class SafePlotlyExpress:
         if chart_type == 'bar':
             return self._build_bar_fallback(data_frame, title=title, **fallback_kwargs)
 
+        if chart_type == 'scatter_3d':
+            return self._build_xyz_fallback(data_frame, title=title, **fallback_kwargs)
+
         data_frame = self._with_index_column(data_frame)
         x_col = fallback_kwargs.get('x')
         y_col = fallback_kwargs.get('y')
@@ -102,6 +105,60 @@ class SafePlotlyExpress:
             color_col=fallback_kwargs.get('color'),
             title=title,
         )
+
+    def _build_xyz_fallback(
+        self,
+        data_frame: pd.DataFrame,
+        x: Optional[str] = None,
+        y: Optional[str] = None,
+        z: Optional[str] = None,
+        color: Optional[str] = None,
+        size: Optional[Any] = None,
+        title: Optional[str] = None,
+        **_: Any,
+    ) -> go.Figure:
+        if x is None or y is None or z is None:
+            raise ValueError("scatter_3d fallback requires x, y, and z arguments.")
+        if x not in data_frame.columns or y not in data_frame.columns or z not in data_frame.columns:
+            raise ValueError("scatter_3d fallback columns must exist in the DataFrame.")
+        if color is not None and color not in data_frame.columns:
+            color = None
+
+        marker_size = None
+        if isinstance(size, str) and size in data_frame.columns and is_numeric_dtype(data_frame[size]):
+            marker_size = data_frame[size]
+
+        fig = go.Figure()
+        if color:
+            grouped = data_frame.groupby(color, dropna=False, sort=False)
+            for group_name, subset in grouped:
+                trace_size = marker_size.loc[subset.index] if marker_size is not None else None
+                fig.add_trace(
+                    go.Scatter3d(
+                        x=subset[x],
+                        y=subset[y],
+                        z=subset[z],
+                        mode='markers',
+                        name=str(group_name),
+                        marker=dict(size=trace_size if trace_size is not None else 5, opacity=0.85),
+                    )
+                )
+        else:
+            fig.add_trace(
+                go.Scatter3d(
+                    x=data_frame[x],
+                    y=data_frame[y],
+                    z=data_frame[z],
+                    mode='markers',
+                    name='data',
+                    marker=dict(size=marker_size if marker_size is not None else 5, opacity=0.85),
+                )
+            )
+
+        if title:
+            fig.update_layout(title=title)
+        fig.update_layout(scene=dict(xaxis_title=x, yaxis_title=y, zaxis_title=z))
+        return fig
 
     def _build_bar_fallback(
         self,
@@ -245,6 +302,33 @@ class SafePlotlyExpress:
         if title:
             fig.update_layout(title=title)
         return fig
+
+
+def _to_numeric_for_corr(series: pd.Series) -> pd.Series:
+    """Prefer native numeric conversion; fallback to stable category codes."""
+    numeric = pd.to_numeric(series, errors='coerce')
+    if numeric.notna().sum() >= 2:
+        return numeric
+
+    out = pd.Series(float('nan'), index=series.index, dtype='float64')
+    non_null = series.notna()
+    if non_null.any():
+        codes = pd.factorize(series[non_null], sort=False)[0]
+        out.loc[non_null] = pd.Series(codes, index=series[non_null].index, dtype='float64')
+    return out
+
+
+def _safe_corr(df: pd.DataFrame, left_col: str, right_col: str) -> float:
+    """Compute correlation safely even when columns are categorical strings."""
+    if left_col not in df.columns or right_col not in df.columns:
+        raise KeyError(f"Columns not found for correlation: {left_col}, {right_col}")
+
+    left = _to_numeric_for_corr(df[left_col])
+    right = _to_numeric_for_corr(df[right_col])
+    valid = left.notna() & right.notna()
+    if valid.sum() < 2:
+        return float('nan')
+    return float(left[valid].corr(right[valid]))
 
 
 SAFE_PX = SafePlotlyExpress(px)
@@ -608,6 +692,28 @@ class CodeStrategy(ChartStrategy):
     def __init__(self, code: str):
         self.code = code
 
+    @staticmethod
+    def _repair_generated_code(code: str) -> tuple[str, bool]:
+        """Patch common LLM chart mistakes before execution."""
+        repaired = code or ""
+
+        # Correlation on categorical strings often crashes; route to safe helper.
+        repaired = re.sub(
+            r"df\[\s*['\"]([^'\"]+)['\"]\s*\]\.corr\(\s*df\[\s*['\"]([^'\"]+)['\"]\s*\]\s*\)",
+            lambda m: f"_safe_corr(df, {repr(m.group(1))}, {repr(m.group(2))})",
+            repaired,
+        )
+
+        # Plotly expects a column for size; direct Python lists can break grouping.
+        size_pattern = r"size\s*=\s*\[\s*1\s*\]\s*\*\s*len\(\s*df\s*\)"
+        uses_constant_size = re.search(size_pattern, repaired) is not None
+        repaired = re.sub(size_pattern, "size='__constant_size__'", repaired)
+
+        # Plotly Express does not support `sort=` on chart calls.
+        repaired = re.sub(r",\s*sort\s*=\s*(True|False)", "", repaired)
+
+        return repaired, uses_constant_size
+
     def generate(self, df: pd.DataFrame, query: Optional[str] = None) -> Optional[Dict[str, Any]]:
         try:
             # 1. Block malicious or blocking GUI calls
@@ -617,8 +723,28 @@ class CodeStrategy(ChartStrategy):
 
             # 2. Execute the code with utility functions available
             # We inject px, pd, go, and format_number_indian so DeepSeek-generated code can use them
-            local_vars = {"df": df, "pd": pd, "px": SAFE_PX, "go": go, "format_number_indian": format_number_indian}
-            exec(self.code, {"pd": pd, "df": df, "px": SAFE_PX, "go": go, "format_number_indian": format_number_indian}, local_vars)
+            executable_code, uses_constant_size = self._repair_generated_code(self.code)
+            df_for_exec = df.copy() if uses_constant_size else df
+            if uses_constant_size and '__constant_size__' not in df_for_exec.columns:
+                df_for_exec['__constant_size__'] = 1
+
+            global_scope = {
+                "pd": pd,
+                "df": df_for_exec,
+                "px": SAFE_PX,
+                "go": go,
+                "format_number_indian": format_number_indian,
+                "_safe_corr": _safe_corr,
+            }
+            local_vars = {
+                "df": df_for_exec,
+                "pd": pd,
+                "px": SAFE_PX,
+                "go": go,
+                "format_number_indian": format_number_indian,
+                "_safe_corr": _safe_corr,
+            }
+            exec(executable_code, global_scope, local_vars)
             
             result = local_vars.get("result")
             
@@ -632,26 +758,27 @@ class CodeStrategy(ChartStrategy):
                 }
 
             # 4. FALLBACK PATH
-            result_df = self._normalize_result_to_dataframe(result)
-            if result_df is None:
+            normalized = self._normalize_result_to_dataframe(result)
+            if normalized is None:
                 raise ValueError(f"Executed code did not return a valid DataFrame or Plotly Figure in 'result'. Type was: {type(result)}")
+            result_df, x_axis, y_axis = normalized
             
             query_lower = (query or "").lower()
             if len(result_df) > 20 and not any(k in query_lower for k in ['for each', 'each', 'all', 'every']):
-                result_df = result_df.nlargest(20, 'Value') if 'Value' in result_df.columns else result_df.head(20)
+                result_df = result_df.nlargest(20, y_axis) if y_axis in result_df.columns and is_numeric_dtype(result_df[y_axis]) else result_df.head(20)
             
             title = query.capitalize() if query else "Generated chart"
             if any(w in query_lower for w in ['pie', 'proportion', 'percentage']):
-                figure = SAFE_PX.pie(result_df, names='Category', values='Value', title=title)
+                figure = SAFE_PX.pie(result_df, names=x_axis, values=y_axis, title=title)
                 _style_figure(figure, 'pie')
                 return self._format_response(figure, 'pie')
             elif any(w in query_lower for w in ['line', 'trend', 'over time']):
-                figure = SAFE_PX.line(result_df, x='Category', y='Value', title=title)
-                _style_figure(figure, 'line', x_title='Category', y_title='Value')
+                figure = SAFE_PX.line(result_df, x=x_axis, y=y_axis, title=title)
+                _style_figure(figure, 'line', x_title=x_axis, y_title=y_axis)
                 return self._format_response(figure, 'line')
             else:
-                figure = SAFE_PX.bar(result_df, x='Category', y='Value', title=title)
-                _style_figure(figure, 'bar', x_title='Category', y_title='Value')
+                figure = SAFE_PX.bar(result_df, x=x_axis, y=y_axis, title=title)
+                _style_figure(figure, 'bar', x_title=x_axis, y_title=y_axis)
                 return self._format_response(figure, 'bar')
                 
         except Exception as e:
@@ -660,16 +787,63 @@ class CodeStrategy(ChartStrategy):
             print(f"\n[chart_generator] ❌ CODE CRASHED:\n{error_traceback}\n")
             raise ChartGenerationError(f"Chart code execution failed:\n{error_traceback}") from e
 
-    def _normalize_result_to_dataframe(self, result: Any) -> Optional[pd.DataFrame]:
+    def _normalize_result_to_dataframe(self, result: Any) -> Optional[tuple[pd.DataFrame, str, str]]:
         if isinstance(result, dict):
-            return pd.DataFrame(list(result.items()), columns=['Category', 'Value'])
+            out = pd.DataFrame(list(result.items()), columns=['Category', 'Value'])
+            return out, 'Category', 'Value'
         elif isinstance(result, pd.Series):
-            df = result.reset_index()
-            df.columns = ['Category', 'Value']
-            return df
-        elif isinstance(result, pd.DataFrame) and len(result.columns) == 2:
-            result.columns = ['Category', 'Value']
-            return result
+            y_label = str(result.name) if result.name else 'Value'
+            x_label = str(result.index.name) if result.index.name else 'Category'
+            out = result.reset_index(name=y_label)
+            out.columns = [x_label, y_label]
+            return out, x_label, y_label
+        elif isinstance(result, pd.DataFrame):
+            df = result.copy()
+
+            if df.empty:
+                return None
+
+            # Fast-path: already in expected shape.
+            if len(df.columns) == 2:
+                x_label = str(df.columns[0])
+                y_label = str(df.columns[1])
+                return df, x_label, y_label
+
+            # Prefer explicit semantic columns when present.
+            column_lookup = {str(col).strip().lower(): col for col in df.columns}
+            if 'category' in column_lookup and 'value' in column_lookup:
+                cat_col = column_lookup['category']
+                val_col = column_lookup['value']
+                out = df[[cat_col, val_col]].copy()
+                return out, str(cat_col), str(val_col)
+
+            numeric_cols = [col for col in df.columns if is_numeric_dtype(df[col])]
+            non_numeric_cols = [col for col in df.columns if col not in numeric_cols]
+
+            # Common case from generated code: [dimension, metric, ...extra].
+            if non_numeric_cols and numeric_cols:
+                out = df[[non_numeric_cols[0], numeric_cols[0]]].copy()
+                return out, str(non_numeric_cols[0]), str(numeric_cols[0])
+
+            # If everything is numeric, use first column as pseudo-category and second as value.
+            if len(numeric_cols) >= 2:
+                out = df[[numeric_cols[0], numeric_cols[1]]].copy()
+                return out, str(numeric_cols[0]), str(numeric_cols[1])
+
+            # Single numeric column: use index as category.
+            if len(numeric_cols) == 1:
+                out = df[[numeric_cols[0]]].copy()
+                x_label = 'Index'
+                y_label = str(numeric_cols[0])
+                out.insert(0, x_label, out.index.astype(str))
+                out.columns = [x_label, y_label]
+                return out, x_label, y_label
+
+            # No numeric columns: chart record counts by first column.
+            first_col = df.columns[0]
+            y_label = 'Count'
+            out = df.groupby(first_col, dropna=False).size().reset_index(name=y_label)
+            return out, str(first_col), y_label
         return None
 
 # ==========================================

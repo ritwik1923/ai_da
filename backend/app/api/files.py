@@ -204,6 +204,7 @@ async def get_file_kpis(file_id: int, db: Session = Depends(get_db)):
         return KPIResponse(
             file_id=file_id,
             summary=kpi_data['summary'],
+            data_profiling=kpi_data.get('data_profiling'),
             metrics=kpi_data['metrics'],
             charts=kpi_data['charts'],
             top_categories=kpi_data['top_categories'],

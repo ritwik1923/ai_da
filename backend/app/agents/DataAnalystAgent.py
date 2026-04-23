@@ -87,149 +87,26 @@ class DataAnalystAgent:
         df=df
         )
 
-    async def _is_direct_calculation(self, query: str) -> bool:
-        """
-        Heuristic-based router to bypass the ReAct manager for standard tasks.
-        """
-        keywords = ["median", "average", "sum", "plot", "chart", "mean", "min", "max", "count"]
-        return any(k in query.lower() for k in keywords)
+            # Include actual column names and types in the prompt
+        self.available_columns = ""
+        if self.df is not None:
+            numeric_cols = self._get_numeric_analysis_columns()
+            categorical_cols = self.df.select_dtypes(include=['object', 'category']).columns.tolist()
+            datetime_cols = self._infer_datetime_columns()
+            categorical_cols = [
+                col for col in categorical_cols
+                if not self._is_identifier_like_column(col)
+            ]
+            self.available_columns = f"""
 
-    async def analyze(self, query : str, history: List[Dict] = None) -> Dict[str, Any]:
-        """
-        Main entry point that routes between 'Fast-Path' and 'Reasoning-Path'.
-        """
-        history = history or []
-        
-        # 1. INTENT ROUTING: Slash latency by detecting direct data tasks
-        calc_keywords = ["median", "average", "sum", "mean", "plot", "max", "min", "count", "exact"]
-        if any(k in query.lower() for k in calc_keywords):
-            logger.info(f"⚡ Fast-Path: Routing direct to Coding LLM for query: '{query}'")
-            return await self._execute_direct_code_path(query)
-        
-        logger.info(f"🧠 ReAct-Path: Routing to Reasoning Manager for query: '{query}'")
-        return await self._execute_reasoning_path(query, history)
+        AVAILABLE COLUMNS IN THIS DATASET:
+        - Numeric (for Y-axis): {', '.join(numeric_cols) if numeric_cols else 'None'}
+        - Categorical (for grouping): {', '.join(categorical_cols) if categorical_cols else 'None'}
+        - Date/Time (for X-axis): {', '.join(datetime_cols) if datetime_cols else 'None'}
 
-    async def _execute_direct_code_path(self, query: str) -> Dict[str, Any]:
-        """
-        Generates code, executes it, and summarizes the actual data for the user.
-        """
-        # A. RETRIEVE EXAMPLES [cite: 8, 11]
-        code_examples = self.example_store.get_context_string(query, k=2)
-        
-        # B. GENERATE CODE (DeepSeek) [cite: 6]
-        code_prompt = PromptTemplate.from_template("""
-            You are an expert Python Data Scientist. Use the pre-loaded 'df' variable.
-            Schema: {schema}
-            Task: {query}
-            
-            Successful Patterns:
-            {examples}
-            
-            RULES:
-            1. Return ONLY executable Python code.
-            2. No explanations or markdown headers.
-            3. Use the 'df' variable directly.
-        """)
-        
-        code_chain = code_prompt | self.coding_llm | StrOutputParser()
-        generated_code = await code_chain.ainvoke({
-            "schema": self.schema_context,
-            "query": query,
-            "examples": code_examples
-        })
-        # C. EXECUTE CODE (Self-Healing Executor) [cite: 10, 37]
-        # Using run_in_threadpool to keep the executor from blocking the event loop
-        execution_result = await run_in_threadpool(self.executor.execute_with_healing, generated_code)
-        raw_data = execution_result.get("output", "No data retrieved.")
-
-        # D. SUMMARIZE DATA (Llama 3.1) [cite: 6]
-        # This replaces generic confirmations with the actual numerical/data answer
-        summary_prompt = PromptTemplate.from_template("""
-            You are a Professional Data Analyst. 
-            The user asked: "{query}"
-            The analysis found: {result}
-            
-            Provide a direct, natural language answer. Be precise with numbers.
-        """)
-        
-        summary_chain = summary_prompt | self.reasoning_llm | StrOutputParser()
-        final_answer = await summary_chain.ainvoke({
-            "query": query,
-            "result": str(raw_data)
-        })
-
-        # E. PREDICATED RETURN: Strictly matches ChatResponse dict schema 
-        return {
-            "answer": final_answer,
-            "generated_code": generated_code,
-            "execution_result": {
-                "status": "success",
-                "raw_output": raw_data,
-                "engine": "fast-path-v4"
-            },
-            "chart_data": execution_result.get("chart_data")
-        }
-
-    async def _execute_reasoning_path(self, query: str, history: List[Dict]) -> Dict[str, Any]:
-        """
-        Standard ReAct loop for complex multi-step analysis [cite: 19-28].
-        """
-        react_examples = self.react_store.get_context_string(query, k=1)
-        history_text = "".join([f"{msg['role']}: {msg['content']}\n" for msg in history])
-        
-        # Refined ReAct Prompt removing problematic markdown [cite: 25, 32]
-        prompt = PromptTemplate.from_template("""
-            Context: {schema_context}
-            History: {history_text}
-            
-            {react_examples}
-            
-            Thought: [reasoning]
-            Action: [tool_name]
-            Action Input: [input]
-            
-            OR
-            
-            Final Answer: [exact answer based on tools]
-            
-            Question: {input}
-        """)
-        
-        chain = prompt | self.reasoning_llm | StrOutputParser()
-        response = await chain.ainvoke({
-            "schema_context": self.schema_context,
-            "history_text": history_text,
-            "react_examples": react_examples,
-            "input": query
-        })
-        
-        return {
-            "answer": response,
-            "generated_code": None,
-            "execution_result": {"status": "reasoning_complete"},
-            "chart_data": None
-        }
-
-    async def analyze_dataset(self) -> Dict[str, Any]:
-        """
-        Run a structured dataset understanding chain for KPI and visualization planning.
-        Delegates to AIAnalysisService and ResponseNormalizer for clean separation of concerns.
-        """
-        ai_service = AIAnalysisService(self.reasoning_llm, self.schema_context, self.df)
-        raw_response = await ai_service.analyze_dataset()
-
-        # Normalize the AI response
-        normalizer = ResponseNormalizer()
-        parsed = normalizer.parse_json_response(raw_response)
-        normalized = normalizer.normalize_analysis_output(parsed, self.df)
-
-        # Log the generated visual recommendations for debugging
-        if normalized.get("visual_recommendations"):
-            logger.info(f"Generated {len(normalized['visual_recommendations'])} visual recommendations:")
-            for i, rec in enumerate(normalized["visual_recommendations"]):
-                logger.info(f"  {i+1}. {rec['title']}: {rec['suggested_query']}")
-
-        return normalized
+        CRITICAL: Only use columns listed above. Do NOT suggest visualizations for columns like 'revenue', 'sales', etc. unless they actually appear in the list above.
+            """
+    
 
     async def generate_kpi_report(self) -> Dict[str, Any]:
         """
@@ -247,6 +124,18 @@ class DataAnalystAgent:
             metrics = profiler.get_metrics(profile)
             top_categories = profiler.get_categories(profile)
             date_metrics, date_insights = profiler.get_date_insights() or (None, None)
+
+            # Keep profiling payload JSON-safe by excluding DataFrame objects.
+            data_profiling = {
+                "total_rows": profile["total_rows"],
+                "total_columns": profile["total_columns"],
+                "numeric_count": profile["numeric_count"],
+                "categorical_count": profile["categorical_count"],
+                "missing_count": profile["missing_count"],
+                "missing_percent": profile["missing_percent"],
+                "numeric_columns": profile["numeric_df"].columns.tolist(),
+                "categorical_columns": profile["categorical_df"].columns.tolist(),
+            }
 
             # Append date metrics if available
             if date_metrics:
@@ -309,6 +198,7 @@ class DataAnalystAgent:
             # 6. Return Complete KPI Report
             return {
                 "summary": summary,
+                "data_profiling": data_profiling,
                 "metrics": metrics,
                 "charts": chart_data,
                 "top_categories": top_categories,
@@ -326,20 +216,31 @@ class DataAnalystAgent:
 
     async def analyze_dataset_kpi(self) -> Dict[str, Any]:
         """Run AI dataset analysis."""
+        safe_fallback_visuals = self._build_fallback_visual_recommendations(limit=15) or self._build_minimum_safe_visual_recommendations(limit=15)
+
         if self.reasoning_llm is None:
             return {
                 "ai_summary": "AI analysis is unavailable because the reasoning model is not initialized.",
                 "data_quality": None,
                 "analysis_insights": None,
-                "visual_recommendations": None,
+                "visual_recommendations": safe_fallback_visuals,
             }
+
+        visualization_plan = self._build_visualization_plan()
+        visualization_plan_text = self._format_visualization_plan_for_prompt(visualization_plan)
 
         # Include actual column names and types in the prompt
         available_columns = ""
         if self.df is not None:
-            numeric_cols = self.df.select_dtypes(include=['number']).columns.tolist()
+            numeric_cols = self._get_numeric_analysis_columns()
             categorical_cols = self.df.select_dtypes(include=['object', 'category']).columns.tolist()
-            datetime_cols = self.df.select_dtypes(include=['datetime64']).columns.tolist()
+            datetime_cols = self._infer_datetime_columns()
+            
+            # CRITICAL: Strip out IDs and Indexes before they reach the LLM
+            numeric_cols = [col for col in numeric_cols if not self._is_identifier_like_column(col)]
+            categorical_cols = [col for col in categorical_cols if not self._is_identifier_like_column(col)]
+            datetime_cols = [col for col in datetime_cols if not self._is_identifier_like_column(col)]
+
             available_columns = f"""
 
         AVAILABLE COLUMNS IN THIS DATASET:
@@ -349,44 +250,88 @@ class DataAnalystAgent:
 
         CRITICAL: Only use columns listed above. Do NOT suggest visualizations for columns like 'revenue', 'sales', etc. unless they actually appear in the list above.
             """
-
+ 
         prompt = PromptTemplate.from_template("""
-            You are an expert data analyst creating business intelligence dashboards for executives and managers with no technical background.
-            Your goal is to provide clear, actionable insights through both text summaries and automated chart generation.
+            You are an Expert Lead Data Scientist and Business Intelligence Strategist.
+            Your goal is to provide clear, actionable insights through both text summaries and highly analytical, compound chart generation.
 
             Dataset Context:
             {schema}{available_columns}
 
+            VISUALIZATION COVERAGE PLAN:
+            {visualization_plan}
+
+            ### ADVANCED ANALYTICS DIRECTIVE (CRITICAL) ###
+            To generate world-class KPIs, you must mentally classify the dataset into:
+            1. TARGET VARIABLES (Outcomes): What are the primary outcomes being measured? (e.g., Price, Profit, Stress_Level, Depression, Stock).
+            2. DRIVER VARIABLES (Inputs): What factors influence those outcomes? (e.g., Category, Region, Age, Screen_Time, Smoking).
+
+            Your visualization recommendations MUST explore the relationships between Drivers and Targets. 
+            When applicable, COMBINE related driver variables to show compounding effects against a target variable.
+            For example:
+            - "Show [Target] rates compared across [Driver 1] and [Driver 2]" 
+            - "Compare average [Target] by [Driver 1] clustered by [Driver 2]"
+
             CRITICAL REQUIREMENTS for visual_recommendations:
-            - Each visualization must have a clear business purpose
-            - suggested_query must be written in natural English that a business user would understand
-            - ONLY use column names that are listed above under AVAILABLE COLUMNS
-            - Every visual_recommendation must be distinct. Do NOT repeat the same metric/category pairing, chart intent, or suggested_query with different wording.
-            - The recommendations must cover different analytical angles when possible: ranking, relationship, distribution, trend, and secondary breakdown.
-            - Prefer top-5 or top-10 ranked category charts instead of showing every category when the dataset has many categories
-            - For "distribution by category" KPIs, prefer a sorted horizontal bar chart over a pie chart or unsorted vertical bars
-            - Focus on queries that will generate meaningful charts using actual columns:
-              * "Show [metric] by [category]" - ONLY if both columns exist
-              * "Compare [metric] across [time]" - ONLY if both exist
-              * "Display distribution of [column]" - ONLY if column exists
-              * "Show relationship between [col1] and [col2]" - ONLY if both exist
-              * "Show top items by [metric]" - ONLY if columns exist
+            - NEVER use IDs, Indexes, Person_ID, or Primary Keys for aggregations or trends.
+            - Look for compounding variables: If multiple columns represent similar themes (e.g., 'Alcohol' and 'Smoking', or 'Price' and 'Stock'), combine them in the analysis.
+            - suggested_query must be written in natural English that a business user would understand.
+            - ONLY use column names that are listed above under AVAILABLE COLUMNS.
+            - Every visual_recommendation must be distinct. Do NOT repeat the same metric/category pairing.
+            - Focus on insightful queries:
+              * "Compare [Target] by [Driver 1] and [Driver 2]" - (Compounding analysis)
+              * "Show relationship between [Continuous Driver] and [Target]" - (Scatter/Correlation)
+              * "Show top 10 [Categorical] by [Target]" - (Ranking)
 
             Output a JSON object with keys:
-            - ai_summary: Executive summary in plain business language (2-3 sentences)
+            - ai_summary: Executive summary outlining the relationship between the key drivers and target variables (2-3 sentences).
             - data_quality: Array of data quality issues found, each with metric, status (good/warning/critical), description
             - analysis_insights: Array of business insights, each with title, description, key_findings array, recommendations array
-            - visual_recommendations: Array of 3 to 5 unique visualization recommendations, each with:
-              * title: Clear, business-friendly title
-              * description: 2-sentence explanation of business value
-              * suggested_query: Natural language query using ONLY columns that exist (from AVAILABLE COLUMNS)
+            - visual_recommendations: Array of 10 to 15 unique visualization recommendations, each with:
+              * title: Clear, analytical title (e.g., "Compound Impact of Smoking & Alcohol on Anxiety")
+              * description: 2-sentence explanation of the analytical/business value.
+              * suggested_query: Natural language query using ONLY columns that exist (from AVAILABLE COLUMNS).
 
-            Focus on the most impactful visualizations that would help business decision-making.
+            STRICT OUTPUT RULES (MANDATORY):
+            - Return ONLY valid JSON (RFC 8259).
+            - Do NOT output markdown, headings, bullet lists, code fences, comments, or extra prose.
+            - Use only double quotes for keys and strings.
+            - Ensure the top-level object includes all keys: ai_summary, data_quality, analysis_insights, visual_recommendations.
+            - If unsure, return empty arrays for data_quality / analysis_insights / visual_recommendations, not null.
+
+            REQUIRED JSON SHAPE:
+                        {{
+                            "ai_summary": "string",
+                            "data_quality": [
+                                {{"metric": "string", "status": "good|warning|critical", "description": "string"}}
+                            ],
+                            "analysis_insights": [
+                                {{
+                                    "title": "string",
+                                    "description": "string",
+                                    "key_findings": ["string"],
+                                    "recommendations": ["string"]
+                                }}
+                            ],
+                            "visual_recommendations": [
+                                {{
+                                    "title": "string",
+                                    "description": "string",
+                                    "suggested_query": "string"
+                                }}
+                            ]
+                        }}
+            
+            Focus on the most impactful, multi-variable visualizations that would drive real-world decision-making.
         """)
 
         chain = prompt | self.reasoning_llm | StrOutputParser()
         try:
-            raw_response = await chain.ainvoke({"schema": self.schema_context, "available_columns": available_columns})
+            raw_response = await chain.ainvoke({
+                "schema": self.schema_context,
+                "available_columns": available_columns,
+                "visualization_plan": visualization_plan_text,
+            })
         except TimeoutError as timeout_error:
             logger.warning(f"KPI AI analysis timed out: {timeout_error}")
             return {
@@ -396,7 +341,7 @@ class DataAnalystAgent:
                 ),
                 "data_quality": None,
                 "analysis_insights": None,
-                "visual_recommendations": None,
+                "visual_recommendations": safe_fallback_visuals,
             }
         except ValueError as llm_error:
             logger.warning(f"KPI AI analysis unavailable: {llm_error}")
@@ -407,40 +352,448 @@ class DataAnalystAgent:
                 ),
                 "data_quality": None,
                 "analysis_insights": None,
-                "visual_recommendations": None,
+                "visual_recommendations": safe_fallback_visuals,
             }
 
         normalizer = ResponseNormalizer()
-        parsed = normalizer.parse_json_response(raw_response)
-        normalized = normalizer.normalize_analysis_output(parsed, self.df)
+        parsed_response = normalizer.parse_json_response(raw_response)
+        normalized = normalizer.normalize_analysis_output(parsed_response, self.df)
 
-        fallback_visuals = self._build_fallback_visual_recommendations() or []
-        normalized_visuals = normalized.get("visual_recommendations") or []
+        ai_visuals = normalized.get("visual_recommendations") or []
+        filtered_visuals = self._filter_visual_recommendations(ai_visuals, limit=15)
 
-        if normalized_visuals:
-            normalized["visual_recommendations"] = self._merge_unique_visual_recommendations(
-                normalized_visuals,
-                fallback_visuals,
-                limit=5,
-            )
-        else:
-            normalized["visual_recommendations"] = fallback_visuals or None
-            if normalized["visual_recommendations"]:
-                logger.info(
-                    "AI response did not include usable visual_recommendations; generated %s deterministic fallback recommendations",
-                    len(normalized["visual_recommendations"]),
-                )
+        if len(filtered_visuals) < 10:
+            fallback_visuals = self._build_fallback_visual_recommendations(limit=15) or self._build_minimum_safe_visual_recommendations(limit=15)
+            filtered_visuals = self._merge_unique_visual_recommendations(filtered_visuals, fallback_visuals, limit=15)
 
-        if normalized.get("visual_recommendations"):
-            logger.info(f"Generated {len(normalized['visual_recommendations'])} KPI visual recommendations")
+        if len(filtered_visuals) < 10:
+            minimum_visuals = self._build_minimum_safe_visual_recommendations(limit=15)
+            filtered_visuals = self._merge_unique_visual_recommendations(filtered_visuals, minimum_visuals, limit=15)
+
+        if filtered_visuals:
+            normalized["visual_recommendations"] = filtered_visuals
+
+        if not normalized.get("visual_recommendations"):
+            normalized["visual_recommendations"] = safe_fallback_visuals
 
         return normalized
+        # return raw_response
+    #TODO Use AI to find the identifirer-like columns, then apply heuristic rules to exclude them from being treated as analytical KPIs. This prevents the common mistake of using ID fields as measures in charts.
+    # Using the .is_unique Property
+    # Checking for Unique + Non-Null
+    # Comparing Unique Count vs. Total Rows
+    def _is_identifier_like_column(self, column_name: str) -> bool:
+        """Heuristic to detect identifier-like columns that should not drive KPI aggregations."""
+        name = str(column_name).strip().lower().replace("-", " ")
+        tokens = set(re.findall(r"[a-z0-9]+", name))
+
+        if name.endswith("_id") or name.endswith(" id"):
+            return True
+
+        identifier_tokens = {
+            "id", "uuid", "guid", "index", "key", "ean", "identifier", "internalid",
+        }
+        if tokens.intersection(identifier_tokens):
+            return True
+
+        compact_name = name.replace(" ", "")
+        if "personid" in compact_name or "customerid" in compact_name or "userid" in compact_name:
+            return True
+
+        # Fall back to data-shape heuristics when naming is ambiguous.
+        if self.df is None or column_name not in self.df.columns:
+            return False
+
+        series = self.df[column_name]
+        non_null = series.dropna()
+        if non_null.empty:
+            return False
+
+        total_rows = len(series)
+        non_null_count = int(series.notna().sum())
+        unique_non_null_count = int(non_null.nunique(dropna=True))
+        unique_ratio = unique_non_null_count / max(1, non_null_count)
+
+        # .is_unique + non-null coverage strongly indicates a record key.
+        if non_null.is_unique and non_null_count >= max(10, int(total_rows * 0.8)):
+            if pd.api.types.is_integer_dtype(non_null) or pd.api.types.is_string_dtype(non_null):
+                return True
+
+        # Compare distinct count to row count: near-unique integer columns are likely surrogate keys.
+        if unique_ratio >= 0.98 and pd.api.types.is_integer_dtype(non_null):
+            return True
+
+        return False
+
+    # TODO: Use AI to get numeric colums
+    def _get_numeric_analysis_columns(self) -> List[str]:
+        """Return numeric columns that are suitable for KPI analysis (excluding identifier-like fields)."""
+
+        numeric_cols = self.df.select_dtypes(include=['number']).columns.tolist()
+        usable_cols: List[str] = []
+
+        for column in numeric_cols:
+            if self._is_identifier_like_column(column):
+                continue
+
+            series = self.df[column].dropna()
+            if series.empty:
+                continue
+
+            unique_ratio = series.nunique() / max(1, len(series))
+            if unique_ratio >= 0.98 and pd.api.types.is_integer_dtype(series):
+                # Near-unique integer columns are usually surrogate keys, not business metrics.
+                continue
+
+            usable_cols.append(column)
+
+        return usable_cols
+
+    def _filter_visual_recommendations(
+        self,
+        recommendations: List[Dict[str, str]],
+        limit: int = 10,
+    ) -> List[Dict[str, str]]:
+        """Drop low-quality recommendations such as ID-based metrics and invalid trend axes."""
+        if not recommendations:
+            return []
+
+        identifier_columns = [
+            str(column)
+            for column in (self.df.columns.tolist() if self.df is not None else [])
+            if self._is_identifier_like_column(str(column))
+        ]
+        datetime_columns = [str(column).lower() for column in self._infer_datetime_columns()]
+
+        filtered: List[Dict[str, str]] = []
+        for item in recommendations:
+            title = str(item.get("title", ""))
+            suggested_query = str(item.get("suggested_query", ""))
+            text = f"{title} {suggested_query}".lower()
+
+            # Remove charts where identifier fields are treated like analytical measures.
+            if any(identifier.lower() in text for identifier in identifier_columns):
+                if "count of records" not in text and "count of" not in text:
+                    continue
+
+            # Trend recommendations must reference a datetime-capable axis.
+            is_trend_intent = "trend" in text or "over" in text or "across" in text
+            if is_trend_intent and "across" in text and datetime_columns:
+                if not any(datetime_col in text for datetime_col in datetime_columns):
+                    continue
+
+            filtered.append(item)
+            if len(filtered) >= limit:
+                break
+
+        return filtered
+
+    def _infer_datetime_columns(self, sample_size: int = 50) -> List[str]:
+        """Infer datetime-capable columns, including object columns with date-like values."""
+        if self.df is None or self.df.empty:
+            return []
+
+        datetime_cols = self.df.select_dtypes(include=['datetime64', 'datetime64[ns]']).columns.tolist()
+        for column in self.df.columns:
+            if column in datetime_cols:
+                continue
+            if pd.api.types.is_numeric_dtype(self.df[column]):
+                continue
+            column_name = str(column).lower()
+            if not any(token in column_name for token in ['date', 'day', 'month', 'year', 'datetime', 'timestamp']):
+                continue
+            sample = self.df[column].head(sample_size)
+            try:
+                parsed = pd.to_datetime(sample, errors='coerce')
+            except (TypeError, ValueError):
+                continue
+            if parsed.notna().sum() >= max(1, int(len(sample) * 0.8)):
+                datetime_cols.append(column)
+
+        return datetime_cols
+
+    def _build_visualization_plan(self, analysis_insights: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, str]]:
+        """Create deterministic coverage slots for KPI visual recommendations."""
+        if self.df is None or self.df.empty:
+            return []
+
+        numeric_cols = self._get_numeric_analysis_columns()
+        categorical_cols = self.df.select_dtypes(include=['object', 'category']).columns.tolist()
+        datetime_cols = self._infer_datetime_columns()
+
+        categorical_cols = [
+            col for col in categorical_cols
+            if not self._is_identifier_like_column(col)
+        ]
+
+        plan: List[Dict[str, str]] = []
+        seen_slots: set[str] = set()
+        insight_text = " ".join(
+            f"{item.get('title', '')} {item.get('description', '')}"
+            for item in (analysis_insights or [])
+            if isinstance(item, dict)
+        ).lower()
+
+        def label(column: str) -> str:
+            return str(column).replace('_', ' ').strip().title()
+
+        def add_slot(slot: str, family: str, title: str, description: str, suggested_query: str, required_columns: List[str]) -> None:
+            if slot in seen_slots:
+                return
+            seen_slots.add(slot)
+            plan.append({
+                "slot": slot,
+                "family": family,
+                "title": title,
+                "description": description,
+                "suggested_query": suggested_query,
+                "required_columns": ", ".join(required_columns),
+            })
+
+        if categorical_cols and numeric_cols:
+            add_slot(
+                slot="ranking_primary",
+                family="ranking",
+                title=f"Top {label(categorical_cols[0])} by {label(numeric_cols[0])}",
+                description=(
+                    f"Rank the leading {label(categorical_cols[0]).lower()} values by {label(numeric_cols[0]).lower()} to reveal the strongest contributors. "
+                    "This is the primary performance view for category-level decisions."
+                ),
+                suggested_query=f"Show top 10 {categorical_cols[0]} by {numeric_cols[0]}",
+                required_columns=[categorical_cols[0], numeric_cols[0]],
+            )
+
+        if len(numeric_cols) >= 2:
+            relationship_query = (
+                f"Show the relationship between {numeric_cols[0]} and {numeric_cols[1]} by {categorical_cols[0]}"
+                if categorical_cols else f"Show the relationship between {numeric_cols[0]} and {numeric_cols[1]}"
+            )
+            relationship_columns = [numeric_cols[0], numeric_cols[1], *categorical_cols[:1]]
+            add_slot(
+                slot="relationship_primary",
+                family="relationship",
+                title=(
+                    f"{label(numeric_cols[0])} vs {label(numeric_cols[1])} by {label(categorical_cols[0])}"
+                    if categorical_cols else f"{label(numeric_cols[0])} vs {label(numeric_cols[1])}"
+                ),
+                description=(
+                    f"Compare {label(numeric_cols[0]).lower()} and {label(numeric_cols[1]).lower()} to expose tradeoffs, clusters, or outliers. "
+                    "This is the main relationship view for operational insights."
+                ),
+                suggested_query=relationship_query,
+                required_columns=relationship_columns,
+            )
+
+        if datetime_cols and numeric_cols:
+            add_slot(
+                slot="trend_primary",
+                family="trend",
+                title=f"{label(numeric_cols[0])} Trend Over {label(datetime_cols[0])}",
+                description=(
+                    f"Track how {label(numeric_cols[0]).lower()} changes over {label(datetime_cols[0]).lower()} to identify timing effects and trend shifts. "
+                    "This is the core time-based view when a date axis exists."
+                ),
+                suggested_query=f"Compare {numeric_cols[0]} across {datetime_cols[0]}",
+                required_columns=[datetime_cols[0], numeric_cols[0]],
+            )
+
+        if numeric_cols:
+            add_slot(
+                slot="distribution_primary",
+                family="distribution",
+                title=f"Distribution of {label(numeric_cols[0])}",
+                description=(
+                    f"Inspect the spread of {label(numeric_cols[0]).lower()} values to identify skew, concentration, and unusual values. "
+                    "This is the primary distribution view for data quality and variability."
+                ),
+                suggested_query=f"Display distribution of {numeric_cols[0]}",
+                required_columns=[numeric_cols[0]],
+            )
+
+        if len(categorical_cols) >= 2 and numeric_cols:
+            add_slot(
+                slot="secondary_breakdown",
+                family="breakdown",
+                title=f"{label(numeric_cols[0])} by {label(categorical_cols[1])}",
+                description=(
+                    f"Break down {label(numeric_cols[0]).lower()} by {label(categorical_cols[1]).lower()} to reveal secondary segmentation patterns. "
+                    "This adds a second business lens beyond the primary category ranking."
+                ),
+                suggested_query=f"Show {numeric_cols[0]} by {categorical_cols[1]}",
+                required_columns=[categorical_cols[1], numeric_cols[0]],
+            )
+        elif categorical_cols:
+            add_slot(
+                slot="breakdown_counts",
+                family="breakdown",
+                title=f"Record Count by {label(categorical_cols[0])}",
+                description=(
+                    f"Count records by {label(categorical_cols[0]).lower()} to understand category concentration and coverage. "
+                    "This helps assess composition when a secondary breakdown is unavailable."
+                ),
+                suggested_query=f"Show count of records by {categorical_cols[0]}",
+                required_columns=[categorical_cols[0]],
+            )
+
+        # Add more deterministic slots so fallback can satisfy 10-15 recommendations.
+        if len(categorical_cols) >= 2 and len(numeric_cols) >= 2:
+            add_slot(
+                slot="ranking_secondary",
+                family="ranking",
+                title=f"Top {label(categorical_cols[1])} by {label(numeric_cols[1])}",
+                description=(
+                    f"Rank {label(categorical_cols[1]).lower()} values by {label(numeric_cols[1]).lower()} to identify a second priority leaderboard. "
+                    "This complements the primary ranking with a different KPI lens."
+                ),
+                suggested_query=f"Show top 10 {categorical_cols[1]} by {numeric_cols[1]}",
+                required_columns=[categorical_cols[1], numeric_cols[1]],
+            )
+
+        if len(numeric_cols) >= 3:
+            relationship_query = (
+                f"Show the relationship between {numeric_cols[0]} and {numeric_cols[2]} by {categorical_cols[0]}"
+                if categorical_cols else f"Show the relationship between {numeric_cols[0]} and {numeric_cols[2]}"
+            )
+            add_slot(
+                slot="relationship_secondary",
+                family="relationship",
+                title=(
+                    f"{label(numeric_cols[0])} vs {label(numeric_cols[2])} by {label(categorical_cols[0])}"
+                    if categorical_cols else f"{label(numeric_cols[0])} vs {label(numeric_cols[2])}"
+                ),
+                description=(
+                    f"Analyze how {label(numeric_cols[0]).lower()} and {label(numeric_cols[2]).lower()} interact to expose non-obvious clusters. "
+                    "This gives a secondary correlation view for strategy decisions."
+                ),
+                suggested_query=relationship_query,
+                required_columns=[numeric_cols[0], numeric_cols[2], *categorical_cols[:1]],
+            )
+
+        if len(numeric_cols) >= 2:
+            add_slot(
+                slot="distribution_secondary",
+                family="distribution",
+                title=f"Distribution of {label(numeric_cols[1])}",
+                description=(
+                    f"Inspect the spread of {label(numeric_cols[1]).lower()} to validate consistency and outlier behavior. "
+                    "This adds a second quality check beyond the primary metric distribution."
+                ),
+                suggested_query=f"Display distribution of {numeric_cols[1]}",
+                required_columns=[numeric_cols[1]],
+            )
+
+        if datetime_cols and len(numeric_cols) >= 2:
+            add_slot(
+                slot="trend_secondary",
+                family="trend",
+                title=f"{label(numeric_cols[1])} Trend Over {label(datetime_cols[0])}",
+                description=(
+                    f"Track {label(numeric_cols[1]).lower()} over {label(datetime_cols[0]).lower()} to confirm trend consistency across KPIs. "
+                    "This complements the primary trend line with a second time-series metric."
+                ),
+                suggested_query=f"Compare {numeric_cols[1]} across {datetime_cols[0]}",
+                required_columns=[datetime_cols[0], numeric_cols[1]],
+            )
+
+        if len(categorical_cols) >= 2 and numeric_cols:
+            add_slot(
+                slot="compound_breakdown",
+                family="breakdown",
+                title=f"{label(numeric_cols[0])} by {label(categorical_cols[0])} and {label(categorical_cols[1])}",
+                description=(
+                    f"Compare {label(numeric_cols[0]).lower()} across combined {label(categorical_cols[0]).lower()} and {label(categorical_cols[1]).lower()} segments. "
+                    "This reveals compounding effects across two categorical drivers."
+                ),
+                suggested_query=f"Compare {numeric_cols[0]} by {categorical_cols[0]} and {categorical_cols[1]}",
+                required_columns=[numeric_cols[0], categorical_cols[0], categorical_cols[1]],
+            )
+
+        if len(categorical_cols) >= 3 and numeric_cols:
+            add_slot(
+                slot="tertiary_breakdown",
+                family="breakdown",
+                title=f"{label(numeric_cols[0])} by {label(categorical_cols[2])}",
+                description=(
+                    f"Break down {label(numeric_cols[0]).lower()} by {label(categorical_cols[2]).lower()} to expand segmentation coverage. "
+                    "This adds another angle for stakeholder comparison."
+                ),
+                suggested_query=f"Show {numeric_cols[0]} by {categorical_cols[2]}",
+                required_columns=[numeric_cols[0], categorical_cols[2]],
+            )
+
+        if len(numeric_cols) >= 3:
+            add_slot(
+                slot="compound_numeric",
+                family="relationship",
+                title=f"Combined Effect of {label(numeric_cols[1])} and {label(numeric_cols[2])} on {label(numeric_cols[0])}",
+                description=(
+                    f"Assess how {label(numeric_cols[1]).lower()} and {label(numeric_cols[2]).lower()} jointly relate to {label(numeric_cols[0]).lower()}. "
+                    "This is a compounding-driver view for multi-factor analysis."
+                ),
+                suggested_query=f"Compare {numeric_cols[0]} by {numeric_cols[1]} and {numeric_cols[2]}",
+                required_columns=[numeric_cols[0], numeric_cols[1], numeric_cols[2]],
+            )
+
+        if categorical_cols and len(numeric_cols) >= 2:
+            add_slot(
+                slot="metric_comparison_by_category",
+                family="comparison",
+                title=f"{label(numeric_cols[0])} vs {label(numeric_cols[1])} by {label(categorical_cols[0])}",
+                description=(
+                    f"Compare {label(numeric_cols[0]).lower()} and {label(numeric_cols[1]).lower()} across {label(categorical_cols[0]).lower()} groups. "
+                    "This highlights category-level tradeoffs between two KPIs."
+                ),
+                suggested_query=f"Compare average {numeric_cols[0]} and {numeric_cols[1]} by {categorical_cols[0]}",
+                required_columns=[categorical_cols[0], numeric_cols[0], numeric_cols[1]],
+            )
+
+        if len(categorical_cols) >= 2:
+            add_slot(
+                slot="segment_size_matrix",
+                family="distribution",
+                title=f"Record Count by {label(categorical_cols[0])} and {label(categorical_cols[1])}",
+                description=(
+                    f"Quantify how records are distributed across {label(categorical_cols[0]).lower()} and {label(categorical_cols[1]).lower()} combinations. "
+                    "This is useful for identifying dominant and underrepresented segments."
+                ),
+                suggested_query=f"Show count of records by {categorical_cols[0]} and {categorical_cols[1]}",
+                required_columns=[categorical_cols[0], categorical_cols[1]],
+            )
+
+        if insight_text:
+            def score(item: Dict[str, str]) -> tuple[int, str]:
+                score_value = 0
+                if item["family"] in insight_text:
+                    score_value += 2
+                for required in item["required_columns"].split(", "):
+                    if required and required.lower() in insight_text:
+                        score_value += 1
+                return (-score_value, item["slot"])
+
+            plan.sort(key=score)
+
+        return plan
+
+    def _format_visualization_plan_for_prompt(self, plan: List[Dict[str, str]]) -> str:
+        """Format visualization slots for the KPI reasoning prompt."""
+        if not plan:
+            return "No deterministic visualization slots are available for this dataset."
+
+        return "\n".join(
+            [
+                f"- Slot: {item['slot']} | Family: {item['family']} | Columns: {item['required_columns']}\n"
+                f"  Title Hint: {item['title']}\n"
+                f"  Business Goal: {item['description']}\n"
+                f"  Suggested Query Seed: {item['suggested_query']}"
+                for item in plan
+            ]
+        )
 
     def _merge_unique_visual_recommendations(
         self,
         primary: List[Dict[str, str]],
         fallback: List[Dict[str, str]],
-        limit: int = 5,
+        limit: int = 15,
     ) -> List[Dict[str, str]]:
         """Merge AI and fallback recommendations while keeping the final set unique."""
         merged: List[Dict[str, str]] = []
@@ -482,83 +835,105 @@ class DataAnalystAgent:
 
         return merged
 
-    def _build_fallback_visual_recommendations(self) -> Optional[List[Dict[str, str]]]:
-        """Create deterministic chart recommendations when the LLM omits them."""
-        if self.df is None or self.df.empty:
+    def _build_fallback_visual_recommendations(
+        self,
+        analysis_insights: Optional[List[Dict[str, Any]]] = None,
+        limit: int = 15,
+    ) -> Optional[List[Dict[str, str]]]:
+        """Create deterministic chart recommendations from the visualization coverage plan."""
+        plan = self._build_visualization_plan(analysis_insights)
+        if not plan:
             return None
+        return [
+            {
+                "title": item["title"],
+                "description": item["description"],
+                "suggested_query": item["suggested_query"],
+            }
+            for item in plan[:limit]
+        ] or None
 
-        numeric_cols = self.df.select_dtypes(include=['number']).columns.tolist()
-        categorical_cols = self.df.select_dtypes(include=['object', 'category']).columns.tolist()
-        datetime_cols = self.df.select_dtypes(include=['datetime64', 'datetime64[ns]']).columns.tolist()
-
-        recommendations: List[Dict[str, str]] = []
-        seen_queries: set[str] = set()
+    def _build_minimum_safe_visual_recommendations(self, limit: int = 15) -> List[Dict[str, str]]:
+        """Build a minimal, always-safe recommendation set to avoid returning null results."""
+        if self.df is None or self.df.empty:
+            return []
 
         def label(column: str) -> str:
             return str(column).replace('_', ' ').strip().title()
 
-        def add_recommendation(title: str, description: str, suggested_query: str) -> None:
-            if suggested_query in seen_queries:
-                return
-            seen_queries.add(suggested_query)
+        numeric_cols = self._get_numeric_analysis_columns()
+        categorical_cols = [
+            col for col in self.df.select_dtypes(include=['object', 'category']).columns.tolist()
+            if not self._is_identifier_like_column(col)
+        ]
+
+        recommendations: List[Dict[str, str]] = []
+
+        if categorical_cols:
             recommendations.append({
-                "title": title,
-                "description": description,
-                "suggested_query": suggested_query,
+                "title": f"Record Count by {label(categorical_cols[0])}",
+                "description": (
+                    f"Count records by {label(categorical_cols[0]).lower()} to understand dataset composition and concentration."
+                ),
+                "suggested_query": f"Show count of records by {categorical_cols[0]}",
             })
 
-        if categorical_cols and numeric_cols:
-            add_recommendation(
-                title=f"Top {label(categorical_cols[0])} by {label(numeric_cols[0])}",
-                description=(
-                    f"This view ranks the leading {label(categorical_cols[0]).lower()} values by {label(numeric_cols[0]).lower()}. "
-                    "It helps identify which groups contribute the most and should be monitored first."
+        if len(categorical_cols) >= 2:
+            recommendations.append({
+                "title": f"Record Count by {label(categorical_cols[1])}",
+                "description": (
+                    f"Compare record counts across {label(categorical_cols[1]).lower()} groups to identify concentration patterns."
                 ),
-                suggested_query=f"Show top 10 {categorical_cols[0]} by {numeric_cols[0]}"
-            )
-
-        if len(numeric_cols) >= 2 and categorical_cols:
-            add_recommendation(
-                title=f"{label(numeric_cols[0])} vs {label(numeric_cols[1])} by {label(categorical_cols[0])}",
-                description=(
-                    f"This chart compares {label(numeric_cols[0]).lower()} and {label(numeric_cols[1]).lower()} across {label(categorical_cols[0]).lower()} values. "
-                    "It helps surface category-level tradeoffs and outliers."
-                ),
-                suggested_query=f"Show the relationship between {numeric_cols[0]} and {numeric_cols[1]} by {categorical_cols[0]}"
-            )
-
-        if datetime_cols and numeric_cols:
-            add_recommendation(
-                title=f"{label(numeric_cols[0])} Trend Over {label(datetime_cols[0])}",
-                description=(
-                    f"This trend view shows how {label(numeric_cols[0]).lower()} changes over {label(datetime_cols[0]).lower()}. "
-                    "It helps identify movement over time and timing effects."
-                ),
-                suggested_query=f"Compare {numeric_cols[0]} across {datetime_cols[0]}"
-            )
+                "suggested_query": f"Show count of records by {categorical_cols[1]}",
+            })
 
         if numeric_cols:
-            add_recommendation(
-                title=f"Distribution of {label(numeric_cols[0])}",
-                description=(
-                    f"This distribution view shows how {label(numeric_cols[0]).lower()} values are spread across the dataset. "
-                    "It helps spot skew, concentration, and unusual values."
+            recommendations.append({
+                "title": f"Distribution of {label(numeric_cols[0])}",
+                "description": (
+                    f"Inspect the spread of {label(numeric_cols[0]).lower()} values to identify variability and unusual observations."
                 ),
-                suggested_query=f"Display distribution of {numeric_cols[0]}"
-            )
+                "suggested_query": f"Display distribution of {numeric_cols[0]}",
+            })
 
-        if len(categorical_cols) >= 2 and numeric_cols:
-            add_recommendation(
-                title=f"{label(numeric_cols[0])} by {label(categorical_cols[1])}",
-                description=(
-                    f"This comparison breaks down {label(numeric_cols[0]).lower()} by {label(categorical_cols[1]).lower()}. "
-                    "It helps identify secondary grouping patterns that may be hidden in the overall totals."
+        if len(numeric_cols) >= 2:
+            recommendations.append({
+                "title": f"Relationship Between {label(numeric_cols[0])} and {label(numeric_cols[1])}",
+                "description": (
+                    f"Analyze how {label(numeric_cols[0]).lower()} and {label(numeric_cols[1]).lower()} move together to find correlation or tradeoffs."
                 ),
-                suggested_query=f"Show {numeric_cols[0]} by {categorical_cols[1]}"
-            )
+                "suggested_query": f"Show relationship between {numeric_cols[0]} and {numeric_cols[1]}",
+            })
 
-        return recommendations[:5] or None
+        if numeric_cols and categorical_cols:
+            recommendations.append({
+                "title": f"Average {label(numeric_cols[0])} by {label(categorical_cols[0])}",
+                "description": (
+                    f"Compare average {label(numeric_cols[0]).lower()} across {label(categorical_cols[0]).lower()} groups for a quick segmented view."
+                ),
+                "suggested_query": f"Show average {numeric_cols[0]} by {categorical_cols[0]}",
+            })
 
+        if len(numeric_cols) >= 2 and categorical_cols:
+            recommendations.append({
+                "title": f"Average {label(numeric_cols[1])} by {label(categorical_cols[0])}",
+                "description": (
+                    f"Compare average {label(numeric_cols[1]).lower()} across {label(categorical_cols[0]).lower()} groups for a second KPI lens."
+                ),
+                "suggested_query": f"Show average {numeric_cols[1]} by {categorical_cols[0]}",
+            })
+
+        if self._infer_datetime_columns() and numeric_cols:
+            dt_col = self._infer_datetime_columns()[0]
+            recommendations.append({
+                "title": f"Trend of {label(numeric_cols[0])} Over {label(dt_col)}",
+                "description": (
+                    f"Track {label(numeric_cols[0]).lower()} over {label(dt_col).lower()} to surface trend shifts."
+                ),
+                "suggested_query": f"Compare {numeric_cols[0]} across {dt_col}",
+            })
+
+        return recommendations[:limit]
 
     def _generate_basic_charts(self, profile: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Generate basic fallback charts when AI charts aren't available."""
@@ -589,68 +964,7 @@ class DataAnalystAgent:
             })
 
         return chart_data
+
+
 if __name__ == "__main__":
-    import asyncio
-    import plotly.graph_objects as go
-    from app.utils.chart_generator import generate_chart
-
-    # --- AI & Vector DB Initialization ---
-    try:
-        # This will load your LLMs and build the FAISS index in memory
-        AgentGlobals.initialize()
-        # app.state.code_learning = AgentGlobals.learn_code_4r_feedback
-        # app.state.react_learning = AgentGlobals.learn_react_4r_feedback
-        # app.state.vector_database_connection = True
-        logger.info("✅ AI Globals and Vector DB initialized successfully.")
-    except Exception as e:
-        # app.state.vector_database_connection = False
-        # 2. FIX: Updated logger message so you know exactly what failed
-        logger.error("❌ AI & Vector DB initialization failed during startup: %s", e)
-        
-
-    async def run_test():
-        # 1. Load the data
-        df_test = pd.read_csv('/Users/rwk3030/Downloads/products-100.csv')
-        
-        # 2. Initialize the agent
-        agent = DataAnalystAgent(df_test)
-        
-        print("⏳ Generating KPI Report... please wait.")
-        
-        # 3. AWAIT the async function to get the actual dictionary
-        report = await agent.generate_kpi_report()
-        print("KPI Report Generated:")
-        print(json.dumps(report, indent=2))
-        # 4. Safely extract the visual recommendations (using the correct key name)
-        recommendations = report.get("visual_recommendations", [])
-        
-        if recommendations and len(recommendations) > 0:
-            chart = recommendations[0].get("chart_data")
-            if chart:
-                print("✅ Chart generated successfully! Opening browser...")
-                fig = go.Figure(chart['data'])
-                fig.show()
-            else:
-                print("⚠️ First recommendation did not contain 'chart_data'.")
-        else:
-            print("⚠️ No visual recommendations were generated by the AI.")
-    async def code_gen():
-        df_test = pd.read_csv('/Users/rwk3030/Downloads/products-100.csv')
-        agent = DataAnalystAgent(df_test)
-        code_result = agent.code_service.generate_and_execute("This bar chart will help us visualize the distribution of customers across different countries, allowing us to identify potential markets and areas for growth.")
-        print("Generated Code:")
-        print(code_result.get("code"))
-        print("Execution Result:")
-        print(code_result.get("result"))
-
-        chart_data = generate_chart(df_test, code_result.get("code"))
-        logger.info("✅ Chart generation complete")
-        
-        if chart_data:
-            fig = go.Figure(chart_data["data"])
-            fig.show()
-
-        
-    # 5. Execute the async loop
-    # asyncio.run(run_test())
-    asyncio.run(code_gen())
+    logger.info("DataAnalystAgent module loaded. Use app entrypoints to run analysis workflows.")

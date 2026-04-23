@@ -2,6 +2,7 @@ import pandas as pd
 
 from app.agents.utility.FewShotExampleStore import Visualization_FewShotExampleStore
 from app.agents.utility.AnalysisToolFactory import AnalysisToolFactory
+from app.agents.DataAnalystAgent import DataAnalystAgent
 
 
 class DummyCodeService:
@@ -46,3 +47,32 @@ def test_visualisation_tool_returns_rag_examples():
 
     assert "visualisation_tool" in payload
     assert "Similar Task: Price Distribution by Category" in payload
+
+
+def test_visualization_plan_covers_major_families():
+    agent = DataAnalystAgent.__new__(DataAnalystAgent)
+    agent.df = pd.DataFrame(
+        {
+            "Category": ["A", "B", "A", "C", "B", "A", "C", "B", "A", "C"],
+            "Region": ["North", "South", "East", "West", "South", "North", "West", "East", "North", "West"],
+            "Channel": ["Online", "Store", "Store", "Online", "Online", "Store", "Online", "Store", "Online", "Store"],
+            "OrderDate": [
+                "2025-01-01", "2025-01-02", "2025-01-03", "2025-01-04", "2025-01-05",
+                "2025-01-06", "2025-01-07", "2025-01-08", "2025-01-09", "2025-01-10",
+            ],
+            "Price": [10, 20, 18, 22, 20, 16, 19, 23, 17, 21],
+            "Stock": [4, 5, 4, 6, 5, 4, 6, 5, 4, 6],
+            "Margin": [2.1, 2.8, 2.4, 3.0, 2.7, 2.2, 3.1, 2.9, 2.3, 3.0],
+        }
+    )
+
+    plan = agent.build_visualization_plan()
+    families = {item["family"] for item in plan}
+    fallback = agent.build_fallback_visual_recommendations()
+
+    assert {"ranking", "relationship", "trend", "distribution", "breakdown"}.issubset(families)
+    assert fallback is not None
+    assert 10 <= len(plan) <= 15
+    assert 10 <= len(fallback) <= 15
+    queries = [item["suggested_query"] for item in fallback]
+    assert len(queries) == len(set(queries))

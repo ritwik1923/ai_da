@@ -102,7 +102,7 @@ export function enhanceChartLayout(layout: any, isDarkMode = false) {
 /**
  * Enhance chart data series with professional colors and styling
  */
-export function enhanceChartData(data: any[], isDarkMode = false) {
+export function enhanceChartData(data: any[], _isDarkMode = false) {
   return data.map((trace: any, index: number) => {
     const color = PROFESSIONAL_COLORS[index % PROFESSIONAL_COLORS.length];
 

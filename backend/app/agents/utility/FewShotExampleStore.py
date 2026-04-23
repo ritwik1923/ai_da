@@ -311,22 +311,52 @@ class Visualization_FewShotExampleStore(FewShotExampleStore):
             "chart_family": "ranked_horizontal_bar",
             "template": "Aggregate price by category, sort descending, and display the top 10 categories as a horizontal bar chart using a sequential blue palette.",
             "rationale": "Category-heavy KPI charts become unreadable when every category is shown. Ranking and limiting to the top 10 makes the highest price-volume categories immediately clear.",
-            "code": "category_price = df.groupby('Category', dropna=False)['Price'].sum().reset_index().sort_values('Price', ascending=False).head(10)\nresult = px.bar(category_price, x='Price', y='Category', orientation='h', color='Price', color_continuous_scale='Blues', title='Top 10 Categories by Total Price')\nresult.update_layout(coloraxis_showscale=False, yaxis={'categoryorder': 'total ascending'})"
+            "code": "result = df.groupby('Category', dropna=False)['Price'].sum().reset_index().sort_values('Price', ascending=False).head(10)\nresult = px.bar(category_price, x='Price', y='Category', orientation='h', color='Price', color_continuous_scale='Blues', title='Top 10 Categories by Total Price')\nresult.update_layout(coloraxis_showscale=False, yaxis={'categoryorder': 'total ascending'})"
         },
         {
             "task": "Top categories by stock or quantity",
             "chart_family": "ranked_horizontal_bar",
             "template": "Aggregate the metric by category, sort descending, and keep only the top 5 or top 10 categories before plotting.",
             "rationale": "Top-N ranking avoids clutter and keeps category comparisons readable in KPI dashboards.",
-            "code": "top_categories = df.groupby('Category', dropna=False)['Stock'].sum().reset_index().sort_values('Stock', ascending=False).head(10)\nresult = px.bar(top_categories, x='Stock', y='Category', orientation='h', color='Stock', color_continuous_scale='Tealgrn', title='Top 10 Categories by Stock')\nresult.update_layout(coloraxis_showscale=False, yaxis={'categoryorder': 'total ascending'})"
+            "code": "result = df.groupby('Category', dropna=False)['Stock'].sum().reset_index().sort_values('Stock', ascending=False).head(10)\nresult = px.bar(top_categories, x='Stock', y='Category', orientation='h', color='Stock', color_continuous_scale='Tealgrn', title='Top 10 Categories by Stock')\nresult.update_layout(coloraxis_showscale=False, yaxis={'categoryorder': 'total ascending'})"
         },
         {
             "task": "Relationship between two metrics by category",
             "chart_family": "aggregated_bubble_scatter",
             "template": "Aggregate both metrics by category, show one labeled point per category, and use bubble size for record count.",
             "rationale": "For KPI relationship charts, aggregated labeled bubbles preserve the comparison while avoiding unreadable point clouds.",
-            "code": "category_summary = df.groupby('Category', dropna=False).agg(Average_Price=('Price', 'mean'), Average_Stock=('Stock', 'mean'), Product_Count=('Category', 'size')).reset_index().sort_values('Product_Count', ascending=False).head(12)\nresult = px.scatter(category_summary, x='Average_Price', y='Average_Stock', color='Category', size='Product_Count', title='Average Price vs Average Stock by Category')\nfor trace in result.data:\n    trace.text = [trace.name] * len(trace.x)\n    trace.mode = 'markers+text'\n    trace.textposition = 'top center'"
-        }
+            "code": "result = df.groupby('Category', dropna=False).agg(Average_Price=('Price', 'mean'), Average_Stock=('Stock', 'mean'), Product_Count=('Category', 'size')).reset_index().sort_values('Product_Count', ascending=False).head(12)\nresult = px.scatter(category_summary, x='Average_Price', y='Average_Stock', color='Category', size='Product_Count', title='Average Price vs Average Stock by Category')\nfor trace in result.data:\n    trace.text = [trace.name] * len(trace.x)\n    trace.mode = 'markers+text'\n    trace.textposition = 'top center'"
+        },
+        {
+            "task": "Trend of a metric over time",
+            "chart_family": "time_series_line",
+            "template": "Aggregate the metric over the date column and show a line chart with the date on the x-axis and the metric on the y-axis.",
+            "rationale": "Line charts are the clearest way to show movement over time for KPI monitoring.",
+            "code": "trend_data = df.groupby('OrderDate', dropna=False)['Price'].mean().reset_index().sort_values('OrderDate')\nresult = px.line(trend_data, x='OrderDate', y='Price', title='Average Price Over Time')"
+        },
+        {
+            "task": "Distribution of a numeric metric",
+            "chart_family": "numeric_distribution",
+            "template": "Use a histogram or box plot to show the spread of a numeric column and identify skew or outliers.",
+            "rationale": "A distribution view highlights concentration, skew, and outliers that summary statistics can miss.",
+            "code": "result = px.histogram(df, x='Price', nbins=30, title='Distribution of Price')"
+        },
+        {
+            "task": "Breakdown of a metric by a secondary segment",
+            "chart_family": "secondary_breakdown_bar",
+            "template": "Aggregate the metric by a secondary categorical column and use a sorted bar chart to compare segment performance.",
+            "rationale": "A secondary breakdown adds a different business lens when the primary category ranking is already shown.",
+            "code": "result = df.groupby('Region', dropna=False)['Price'].sum().reset_index().sort_values('Price', ascending=False).head(10)\nresult = px.bar(segment_data, x='Region', y='Price', title='Top Regions by Total Price')"
+        },
+        {
+            "task": "Ranking of categories by a metric",
+            "chart_family": "ranked_horizontal_bar",
+            "template": "Aggregate the metric by category, sort descending, and display the top categories as a horizontal bar chart using an appropriate color palette.",
+            "rationale": "Ranking is a fundamental pattern for category-heavy KPI charts to maintain readability and highlight top performers.",
+            "code": "result = df.groupby('Category', dropna=False)['Price'].sum().reset_index().sort_values('Price', ascending=False).head(10)\nresult = px.bar(category_price, x='Price', y='Category', orientation='h', color='Price', color_continuous_scale='Blues', title='Top 10 Categories by Total Price')\nresult.update_layout(coloraxis_showscale=False, yaxis={'categoryorder': 'total ascending'})"
+            
+        },
+        
     ]
 
     def __init__(self, embeddings_model):

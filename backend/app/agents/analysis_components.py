@@ -243,30 +243,7 @@ class ResponseNormalizer:
             return None
 
         normalized = []
-        seen_signatures = set()
-
-        def build_signature(title: str, suggested_query: str) -> tuple[str, tuple[str, ...]]:
-            query_lower = (suggested_query or "").strip().lower()
-            title_lower = (title or "").strip().lower()
-
-            if any(token in query_lower for token in ["relationship", "correlation", " vs ", " versus "]):
-                intent = "relationship"
-            elif any(token in query_lower for token in ["distribution", "histogram"]):
-                intent = "distribution"
-            elif any(token in query_lower for token in ["trend", "over time", "across time"]):
-                intent = "trend"
-            elif any(token in query_lower for token in ["top ", "rank", "highest", "lowest"]):
-                intent = "ranking"
-            else:
-                intent = "comparison"
-
-            stopwords = {
-                "show", "display", "compare", "relationship", "between", "across", "over", "time",
-                "top", "by", "the", "and", "of", "for", "to", "with", "a", "an", "vs", "versus"
-            }
-            tokens = re.findall(r"[a-zA-Z_]{3,}", f"{title_lower} {query_lower}")
-            keywords = tuple(sorted({token for token in tokens if token not in stopwords}))
-            return intent, keywords
+        seen_queries = set()
 
         for item in value:
             if not isinstance(item, dict):
@@ -275,10 +252,10 @@ class ResponseNormalizer:
             description = self.normalize_string(item.get("description")) or ""
             suggested_query = self.normalize_string(item.get("suggested_query")) or ""
             if suggested_query and len(suggested_query.split()) >= 3:
-                signature = build_signature(title, suggested_query)
-                if signature in seen_signatures:
+                query_key = suggested_query.strip().lower()
+                if query_key in seen_queries:
                     continue
-                seen_signatures.add(signature)
+                seen_queries.add(query_key)
                 normalized.append({
                     "title": title,
                     "description": description,

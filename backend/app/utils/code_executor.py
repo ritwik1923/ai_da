@@ -1,5 +1,7 @@
 import pandas as pd
 import numpy as np
+import plotly.express as px
+import plotly.graph_objects as go
 from typing import Dict, Any
 from RestrictedPython import compile_restricted, safe_globals
 from RestrictedPython.Guards import (
@@ -48,6 +50,8 @@ def safe_execute_pandas_code(code: str, df: pd.DataFrame) -> Dict[str, Any]:
         'df': df,
         'pd': pd,
         'np': np,
+        'px': px,
+        'go': go,
         're': re,  
         '__builtins__': safe_builtins,
         '_iter_unpack_sequence_': guarded_iter_unpack_sequence,
@@ -88,6 +92,15 @@ def safe_execute_pandas_code(code: str, df: pd.DataFrame) -> Dict[str, Any]:
             return {
                 'type': 'scalar',
                 'value': result if isinstance(result, (int, float, str, bool)) else result.item()
+            }
+        elif isinstance(result, go.Figure):
+            title_text = None
+            if result.layout and result.layout.title:
+                title_text = result.layout.title.text
+            return {
+                'type': 'plotly_figure',
+                'trace_count': len(result.data),
+                'title': title_text
             }
         elif isinstance(result, (dict, list)):
             return {'type': 'collection', 'data': result}
