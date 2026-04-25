@@ -102,10 +102,10 @@ test_cases:
     expected_snippet: ".str.len()"
     expected_val: "35.47"
 
-  # - id: 20
-  #   query: "Which specific Brand has the highest average product price?"
-  #   expected_snippet: "mean"
-  #   expected_val: "Zimmerman, Barr and Davis"
+  - id: 20
+    query: "Which specific Brand has the highest average product price?"
+    expected_snippet: "mean"
+    expected_val: "Zimmerman, Barr and Davis"
 
   # # # Level 5: Chart Generation & Visualization
   # - id: 21

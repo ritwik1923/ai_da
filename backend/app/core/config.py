@@ -69,6 +69,8 @@ class Settings(BaseSettings):
     MAX_ITERATIONS: int = 150
     LOCAL_LLM_MAX_ITERATIONS: int = 50  # Low for local models; Mistral typically completes in 3-4 iterations
     OLLAMA_MODEL: str = "mistral"  # Mistral is more instruction-following than llama3
+    OLLAMA_TIMEOUT_SECONDS: int = 120
+    OLLAMA_MAX_CONCURRENT_REQUESTS: int = 15
     AGENT_VERBOSE: bool = True
     
     class Config:
