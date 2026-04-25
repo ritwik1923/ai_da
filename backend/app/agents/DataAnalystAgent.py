@@ -106,7 +106,10 @@ class DataAnalystAgent:
             "bar", "line", "histogram", "pie", "trend"
         }
         normalized_query = query.lower()
-        return any(keyword in normalized_query for keyword in chart_keywords)
+        return any(
+            re.search(rf"\b{re.escape(keyword)}\b", normalized_query)
+            for keyword in chart_keywords
+        )
 
     @staticmethod
     def _looks_like_reasoning_plan(response: str) -> bool:
@@ -115,11 +118,30 @@ class DataAnalystAgent:
             "to answer the question",
             "i will use the following steps",
             "here's how i would",
+            "to solve this question",
+            "i will use the analysis tool",
+            "we need to use the analysis tool",
+            "follow these steps",
+            "thought process",
+            "similar thought process",
+            "i will follow",
+            "we need to",
             "thought:",
             "action:",
             "final answer:",
         ]
         return any(marker in normalized_response for marker in plan_markers)
+
+    @staticmethod
+    def _format_scalar_answer(raw_data: Dict[str, Any]) -> Optional[str]:
+        if raw_data.get("type") != "scalar":
+            return None
+
+        value = raw_data.get("value")
+        if value is None:
+            return None
+
+        return str(value)
 
 
     async def analyze(self, query : str, history: List[Dict] = None) -> Dict[str, Any]:
@@ -197,6 +219,19 @@ class DataAnalystAgent:
 
         raw_data = execution_result.result or {"type": "unknown", "value": "No data retrieved."}
 
+        scalar_answer = self._format_scalar_answer(raw_data)
+        if scalar_answer is not None:
+            return {
+                "answer": scalar_answer,
+                "generated_code": generated_code,
+                "execution_result": {
+                    "status": "success",
+                    "raw_output": raw_data,
+                    "engine": "fast-path-v4"
+                },
+                "chart_data": None
+            }
+
         # D. SUMMARIZE DATA (Llama 3.1) [cite: 6]
         # This replaces generic confirmations with the actual numerical/data answer
         summary_prompt = PromptTemplate.from_template("""
@@ -212,6 +247,9 @@ class DataAnalystAgent:
             "query": query,
             "result": str(raw_data)
         })
+
+        if self._looks_like_reasoning_plan(final_answer):
+            final_answer = str(raw_data)
 
         # E. PREDICATED RETURN: Strictly matches ChatResponse dict schema 
         return {

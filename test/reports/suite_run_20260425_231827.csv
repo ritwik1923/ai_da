@@ -1,0 +1,85 @@
+row_type,run_timestamp,case_id,attempt_number,session_id,original_query,sent_message,expected_value,response,generated_code,message_id,matched_expected,final_case_status,case_elapsed_time_sec,attempt_elapsed_time_sec,feedback_sent,error,metric_name,metric_value
+attempt,20260425_231827,1,1,suite_20260425_231827_1,What is the exact median price of all products in the dataset?,What is the exact median price of all products in the dataset?,407.5,407.5,result = df['Price'].median(),994,True,passed,14.32,14.00,True,,,
+attempt,20260425_231827,2,1,suite_20260425_231827_2,What is the name and price of the single most expensive product?,What is the name and price of the single most expensive product?,"Ultra Speakerphone Oven Go Smart X, 999","The single most expensive product is the ""Ultra Speakerphone Oven Go Smart X"" and it costs $999.","result = df.loc[df['Price'].idxmax(), ['Name', 'Price']].to_dict()",998,True,passed,25.56,24.31,True,,,
+attempt,20260425_231827,3,1,suite_20260425_231827_3,How many unique brands are represented in this dataset?,How many unique brands are represented in this dataset?,100,100,result = df['Brand'].nunique(),999,True,passed,25.57,24.32,True,,,
+attempt,20260425_231827,4,1,suite_20260425_231827_4,Give me the exact count of products for each availability status.,Give me the exact count of products for each availability status.,25,LimeGreen,result = df[df['Availability'] == 'pre_order']['Color'].mode().iloc[0],992,False,passed,25.56,2.72,False,,,
+attempt,20260425_231827,4,2,suite_20260425_231827_4,Give me the exact count of products for each availability status.,"Your answer was wrong. Please re-read the question and provide a correct response.
+Query: Give me the exact count of products for each availability status.
+Answer: LimeGreen 
+Expected Value: 25",25,"The count of products for each availability status is as follows:
+
+* Pre-order: 25
+* In stock: 20
+* Limited stock: 17
+* Backorder: 16
+* Discontinued: 12
+* Out of stock: 10",result = df['Availability'].value_counts(),997,True,passed,25.56,21.58,True,,,
+attempt,20260425_231827,5,1,suite_20260425_231827_5,How many products contain the word 'Smart' anywhere in their name?,How many products contain the word 'Smart' anywhere in their name?,10,10,"result = df[df['Name'].str.contains('Smart', case=False)].shape[0]",996,True,passed,24.28,18.49,True,,,
+attempt,20260425_231827,6,1,suite_20260425_231827_6,Which 3 categories have the highest total stock available?,Which 3 categories have the highest total stock available?,3314,"Based on the analysis, the top 3 categories with the highest total stock available are:
+
+1. Cleaning Supplies with 3314 units
+2. Health & Wellness with 3268 units
+3. Kids' Clothing with 3049 units",result = df.groupby('Category')['Stock'].sum().nlargest(3),1004,True,passed,27.06,17.05,False,,,
+attempt,20260425_231827,7,1,suite_20260425_231827_7,What is the average price of items broken down by their availability status?,What is the average price of items broken down by their availability status?,606.6,"The average price of items broken down by their availability status is as follows:
+
+* Backorder: $446.38
+* Discontinued: $433.42
+* In Stock: $518.20
+* Limited Stock: $446.18
+* Out of Stock: $606.60
+* Pre-Order: $350.44
+
+These prices are based on the analysis and represent the average price for each availability status.",result = df.groupby('Availability')['Price'].mean(),1007,True,passed,36.20,26.19,False,,,
+attempt,20260425_231827,8,1,suite_20260425_231827_8,What is the total combined stock for all items in the 'Kitchen Appliances' category?,What is the total combined stock for all items in the 'Kitchen Appliances' category?,2572,2572,result = df[df['Category'] == 'Kitchen Appliances']['Stock'].sum(),1006,True,passed,34.91,24.90,False,,,
+attempt,20260425_231827,9,1,suite_20260425_231827_9,What is the most common color specifically among products that are on 'pre_order'?,What is the most common color specifically among products that are on 'pre_order'?,LimeGreen,"Based on the analysis, the most common color among products that are on ""pre_order"" is LimeGreen, which appears at index 0 in the data series.",result = df[df['Availability'] == 'pre_order']['Color'].mode(),1013,True,passed,64.85,54.84,False,,,
+attempt,20260425_231827,10,1,suite_20260425_231827_10,Which 3 brands have the absolute lowest total stock across all their products?,Which 3 brands have the absolute lowest total stock across all their products?,10,"Based on the analysis, the three brands with the absolute lowest total stock across all their products are:
+
+1. Lewis Ltd with a total stock of 10 units
+2. Decker, Montes and Logan with a total stock of 19 units
+3. Barker-Murphy is not actually in this group, it has 47 units which is higher than the other two. The actual third brand is not specified in the data provided, but we can see that Lewis Ltd and Decker, Montes and Logan are the lowest.
+
+However, since there's no clear indication of a third brand with lower stock, I'll provide an answer based on the given data:
+
+1. Lewis Ltd with 10 units
+2. Decker, Montes and Logan with 19 units",result = df.groupby('Brand')['Stock'].sum().nsmallest(3),1010,True,passed,39.84,39.30,True,,,
+attempt,20260425_231827,11,1,suite_20260425_231827_11,"If we define 'Inventory Value' as Price multiplied by Stock, what is the total inventory value of the entire dataset?","If we define 'Inventory Value' as Price multiplied by Stock, what is the total inventory value of the entire dataset?","24,452,583","The total inventory value of the entire dataset is approximately $535,887,222.",result = df['Price'] * df['Stock'].sum(),1012,False,failed,122.79,39.03,False,,,
+attempt,20260425_231827,11,2,suite_20260425_231827_11,"If we define 'Inventory Value' as Price multiplied by Stock, what is the total inventory value of the entire dataset?","Your answer was wrong. Please re-read the question and provide a correct response.
+Query: If we define 'Inventory Value' as Price multiplied by Stock, what is the total inventory value of the entire dataset?
+Answer: The total inventory value of the entire dataset is approximately $535,887,222. 
+Expected Value: 24,452,583","24,452,583",5719031,result = df[df['Availability'] == 'in_stock']['Stock'].mul(df[df['Availability'] == 'in_stock']['Price']).sum(),1020,False,failed,122.79,17.18,False,,,
+attempt,20260425_231827,11,3,suite_20260425_231827_11,"If we define 'Inventory Value' as Price multiplied by Stock, what is the total inventory value of the entire dataset?","Your answer was wrong. Please re-read the question and provide a correct response.
+Query: If we define 'Inventory Value' as Price multiplied by Stock, what is the total inventory value of the entire dataset?
+Answer: 5719031 
+Expected Value: 24,452,583","24,452,583",5719031,result = df[df['Availability'] == 'in_stock']['Stock'].mul(df[df['Availability'] == 'in_stock']['Price']).sum(),1025,False,failed,122.79,36.97,False,,,
+attempt,20260425_231827,11,4,suite_20260425_231827_11,"If we define 'Inventory Value' as Price multiplied by Stock, what is the total inventory value of the entire dataset?","Your answer was wrong. Please re-read the question and provide a correct response.
+Query: If we define 'Inventory Value' as Price multiplied by Stock, what is the total inventory value of the entire dataset?
+Answer: 5719031 
+Expected Value: 24,452,583","24,452,583",5719031,result = df[df['Availability'] == 'in_stock']['Stock'].mul(df[df['Availability'] == 'in_stock']['Price']).sum(),1032,False,failed,122.79,15.07,False,,,
+attempt,20260425_231827,11,5,suite_20260425_231827_11,"If we define 'Inventory Value' as Price multiplied by Stock, what is the total inventory value of the entire dataset?","Your answer was wrong. Please re-read the question and provide a correct response.
+Query: If we define 'Inventory Value' as Price multiplied by Stock, what is the total inventory value of the entire dataset?
+Answer: 5719031 
+Expected Value: 24,452,583","24,452,583",5719031,result = df[df['Availability'] == 'in_stock']['Stock'].mul(df[df['Availability'] == 'in_stock']['Price']).sum(),1036,False,failed,122.79,14.54,False,,,
+attempt,20260425_231827,12,1,suite_20260425_231827_12,What is the total inventory value (Price * Stock) for only the items that are currently 'in_stock'?,What is the total inventory value (Price * Stock) for only the items that are currently 'in_stock'?,"5,719,031",5719031,result = df[(df['Availability'] == 'in_stock')]['Price'].mul(df[df['Availability'] == 'in_stock']['Stock']).sum(),1015,True,passed,29.94,19.93,False,,,
+attempt,20260425_231827,13,1,suite_20260425_231827_13,Exactly what percentage of the total products in this dataset have an availability of 'discontinued'?,Exactly what percentage of the total products in this dataset have an availability of 'discontinued'?,12.0,12.0,result = df[df['Availability'] == 'discontinued'].shape[0] / df.shape[0] * 100,1014,True,passed,29.94,19.93,False,,,
+attempt,20260425_231827,14,1,suite_20260425_231827_14,How many products have a color of 'Black' AND a stock level greater than 50?,How many products have a color of 'Black' AND a stock level greater than 50?,2,There are 2 products that have a color of 'Black' AND a stock level greater than 50.,result = df[(df['Color'] == 'Black') & (df['Stock'] > 50)],1024,True,passed,70.79,69.15,True,,,
+attempt,20260425_231827,15,1,suite_20260425_231827_15,How many products are priced over $200 but have less than 20 items in stock?,How many products are priced over $200 but have less than 20 items in stock?,2,2,result = df[(df['Price'] > 200) & (df['Stock'] < 20)]['Availability'].count(),1026,True,passed,45.79,44.15,True,,,
+attempt,20260425_231827,16,1,suite_20260425_231827_16,Is there a correlation between the Price of a product and its Stock level? Give me the exact correlation coefficient.,Is there a correlation between the Price of a product and its Stock level? Give me the exact correlation coefficient.,-0.022768857437636264,-0.022768857437636264,result = df['Price'].corr(df['Stock']),1022,True,passed,30.46,29.49,True,,,
+attempt,20260425_231827,17,1,suite_20260425_231827_17,Which product Category has the widest price range?,Which product Category has the widest price range?,Automotive,The Automotive category has a price range of $970.,result = df.groupby('Category')['Price'].apply(lambda x: x.max() - x.min()).nlargest(1),1030,True,passed,56.77,53.71,True,,,
+attempt,20260425_231827,18,1,suite_20260425_231827_18,"If we group the data by 'Size', which specific size has the highest average price?","If we group the data by 'Size', which specific size has the highest average price?",XL,XL,result = df.groupby('Size')['Price'].mean().idxmax(),1031,True,passed,27.38,26.35,True,,,
+attempt,20260425_231827,19,1,suite_20260425_231827_19,What is the average character length of the 'Description' field?,What is the average character length of the 'Description' field?,35.47,35.47,result = df['Description'].apply(len).mean(),1034,True,passed,17.63,16.57,True,,,
+attempt,20260425_231827,20,1,suite_20260425_231827_20,Which specific Brand has the highest average product price?,Which specific Brand has the highest average product price?,"Zimmerman, Barr and Davis","The brand ""Zimmerman, Barr and Davis"" has the highest average product price at $999.00.",result = df.groupby('Brand')['Price'].mean().nlargest(1),1035,True,passed,27.94,26.25,True,,,
+summary,20260425_231827,,,,,,,,,,,,,,,,total_cases,20
+summary,20260425_231827,,,,,,,,,,,,,,,,passed_cases,19
+summary,20260425_231827,,,,,,,,,,,,,,,,failed_cases,1
+summary,20260425_231827,,,,,,,,,,,,,,,,pass_rate_pct,95.0
+summary,20260425_231827,,,,,,,,,,,,,,,,total_attempts,25
+summary,20260425_231827,,,,,,,,,,,,,,,,avg_attempts_per_case,1.25
+summary,20260425_231827,,,,,,,,,,,,,,,,successful_attempts,19
+summary,20260425_231827,,,,,,,,,,,,,,,,attempt_success_rate_pct,76.0
+summary,20260425_231827,,,,,,,,,,,,,,,,avg_attempt_latency_sec,27.84
+summary,20260425_231827,,,,,,,,,,,,,,,,max_attempt_latency_sec,69.15
+summary,20260425_231827,,,,,,,,,,,,,,,,avg_case_latency_sec,38.88
+summary,20260425_231827,,,,,,,,,,,,,,,,max_case_latency_sec,122.79
+summary,20260425_231827,,,,,,,,,,,,,,,,total_suite_time_sec,164.23
+summary,20260425_231827,,,,,,,,,,,,,,,,concurrency,5
+summary,20260425_231827,,,,,,,,,,,,,,,,max_retries,5
