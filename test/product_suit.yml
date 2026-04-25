@@ -1,3 +1,5 @@
+file_name: /Users/rwk3030/Downloads/products-100.csv
+
 test_cases:
   # Level 1: Basic Retrieval & Distribution
   - id: 1

@@ -1,3 +1,4 @@
+import argparse
 import csv
 import json
 import logging
@@ -35,6 +36,26 @@ csv_report_filename = os.path.join(REPORT_DIR, f"suite_run_{timestamp}.csv")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", 
                     handlers=[logging.FileHandler(log_filename), logging.StreamHandler()])
 logger = logging.getLogger(__name__)
+
+
+def build_argument_parser():
+    argument_parser = argparse.ArgumentParser(
+        description=(
+            "Run the automated RAG/LLM test suite. "
+            "The script loads a suite YAML file, uploads the configured dataset, "
+            "executes each test case against the backend, and writes a CSV report "
+            "with per-attempt results plus summary metrics."
+        )
+    )
+    argument_parser.add_argument(
+        "suite",
+        nargs="?",
+        help=(
+            "Path to the suite YAML file. "
+            "The suite can define 'file_name' for the dataset and 'test_cases' for prompts."
+        ),
+    )
+    return argument_parser
 
 
 def normalize_text(value):
@@ -118,6 +139,23 @@ def load_test_cases(file_path):
     except Exception as e:
         logger.error(f"❌ Failed to load YAML: {e}")
         return []
+
+
+def load_suite_config(file_path):
+    """Loads suite-level configuration such as file_name from YAML."""
+    try:
+        with open(file_path, 'r') as f:
+            data = yaml.safe_load(f) or {}
+            return {
+                "file_name": data.get("file_name") or FILE_PATH,
+                "test_cases": data.get("test_cases", []),
+            }
+    except Exception as e:
+        logger.error(f"❌ Failed to load suite config: {e}")
+        return {
+            "file_name": FILE_PATH,
+            "test_cases": [],
+        }
 
 def call_rag_api(message, session_id, file_id):
     payload = {"session_id": session_id, "message": message, "file_id": file_id}
@@ -331,18 +369,21 @@ def process_test_case(case, file_id):
 
 
 
-def run_automated_suite():
+def run_automated_suite(selected_suite_path):
     suite_start_time = time.time()
     # 1. Load Data
-    test_cases = load_test_cases(YML_FILE)
+    suite_config = load_suite_config(selected_suite_path)
+    test_cases = suite_config["test_cases"]
+    upload_file_path = suite_config["file_name"]
     if not test_cases:
         return
 
-    logger.info(f"🚀 Loaded {len(test_cases)} test cases from {YML_FILE}")
+    logger.info(f"🚀 Loaded {len(test_cases)} test cases from {selected_suite_path}")
+    logger.info(f"📁 Using suite file: {upload_file_path}")
 
     # 2. Upload File Once
     try:
-        with open(FILE_PATH, "rb") as f:
+        with open(upload_file_path, "rb") as f:
             resp = requests.post(f"{BASE_URL}/files/upload", files={"file": f})
             file_id = resp.json()["id"]
             logger.info(f"✅ Data uploaded. ID: {file_id}")
@@ -409,8 +450,23 @@ def run_automated_suite():
 
 
 if __name__ == "__main__":
+    argument_parser = build_argument_parser()
+    args = argument_parser.parse_args()
+
+    if not args.suite:
+        argument_parser.print_help()
+        print("\nWhat this script does:")
+        print("- Loads a suite YAML file containing 'file_name' and 'test_cases'.")
+        print("- Uploads the dataset file to the backend once.")
+        print("- Runs each test case against the chat API with retries.")
+        print("- Writes a CSV report with per-attempt outputs and summary metrics.")
+        print("\nExample:")
+        print("python3 rwk_test.py /Users/rwk3030/dev/ai_da/test/product_suit.yml")
+        raise SystemExit(0)
+
+    selected_suite_path = os.path.abspath(args.suite)
     start_time = time.time()
-    run_automated_suite()
+    run_automated_suite(selected_suite_path)
     end_time = time.time()
     elapsed_time = end_time - start_time
     logger.info(f"⏱️ Total execution time: {elapsed_time:.2f} seconds")
