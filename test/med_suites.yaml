@@ -1,0 +1,105 @@
+test_cases:
+  # ==========================================
+  # Test Suite: Mental Health & Lifestyle
+  # Target File: mental_health_lifestyle_2000.csv
+  # Focus: Aggregations, Multi-condition Logic, Categorical Counts
+  # ==========================================
+  - id: 1
+    query: "What is the exact median Age of all individuals in the dataset?"
+    expected_snippet: ".median()"
+    expected_val: "38.0"
+
+  - id: 2
+    query: "How many individuals in the dataset identify as Female?"
+    expected_snippet: "=="
+    expected_val: "1008"
+
+  - id: 3
+    query: "What is the most common Occupation in the dataset?"
+    expected_snippet: "mode"
+    expected_val: "Student"
+
+  - id: 4
+    query: "What is the maximum recorded Daily Screen Time among all individuals?"
+    expected_snippet: ".max()"
+    expected_val: "12.0"
+
+  - id: 5
+    query: "What is the average Sleep Hours across the dataset (rounded to 2 decimal places)?"
+    expected_snippet: ".mean()"
+    expected_val: "6.01"
+
+  - id: 6
+    query: "What is the highest number of Work/Study Hours recorded for a single person?"
+    expected_snippet: ".max()"
+    expected_val: "12.0"
+
+  - id: 7
+    query: "What is the total combined Caffeine Intake score for all individuals?"
+    expected_snippet: ".sum()"
+    expected_val: "4059"
+
+  - id: 8
+    query: "Exactly how many people in this dataset report Smoking (Smoking == 1)?"
+    expected_snippet: "=="
+    expected_val: "984"
+
+  - id: 9
+    query: "How many individuals have been flagged with Depression (Depression == 1)?"
+    expected_snippet: "=="
+    expected_val: "998"
+
+  - id: 10
+    query: "What is the average Social Interaction Score specifically for people experiencing Burnout (Burnout == 1), rounded to 2 decimal places?"
+    expected_snippet: ".mean()"
+    expected_val: "5.45"
+
+  - id: 11
+    query: "How many individuals have a Physical Activity level categorized strictly as 'High'?"
+    expected_snippet: "=="
+    expected_val: "656"
+
+  - id: 12
+    query: "What is the exact median Stress Level across all 2000 records?"
+    expected_snippet: ".median()"
+    expected_val: "5.0"
+
+  - id: 13
+    query: "What is the Age of the youngest person in the dataset?"
+    expected_snippet: ".min()"
+    expected_val: "16"
+
+  - id: 14
+    query: "What is the Age of the oldest person in the dataset?"
+    expected_snippet: ".max()"
+    expected_val: "59"
+
+  - id: 15
+    query: "How many individuals suffer from BOTH Anxiety (1) and Depression (1) simultaneously?"
+    expected_snippet: "&"
+    expected_val: "562"
+
+  - id: 16
+    query: "What is the average Daily Screen Time specifically for people whose Occupation is 'Student' (rounded to 2 decimal places)?"
+    expected_snippet: ".mean()"
+    expected_val: "6.9"
+
+  - id: 17
+    query: "How many individuals completely abstain from both Alcohol (0) and Smoking (0)?"
+    expected_snippet: "&"
+    expected_val: "521"
+
+  - id: 18
+    query: "How many unique categories exist in the 'Physical_Activity' column?"
+    expected_snippet: ".nunique()"
+    expected_val: "3"
+
+  - id: 19
+    query: "What is the maximum achievable Social Interaction Score recorded in this data?"
+    expected_snippet: ".max()"
+    expected_val: "10"
+
+  - id: 20
+    query: "How many people report Night Usage of their screens (Night_Usage == 1)?"
+    expected_snippet: "=="
+    expected_val: "979"

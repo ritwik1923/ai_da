@@ -199,30 +199,6 @@ class ChartStrategyFactory:
             
         return BarChartStrategy()
 
-
-class ChartGeneratorService_old:
-    """Main Orchestrator Service."""
-    
-    @staticmethod
-    def generate_chart(df: pd.DataFrame, query: str, code: Optional[str] = None) -> Optional[Dict[str, Any]]:
-        if df is None or getattr(df, "empty", False):
-            print("[chart_generator] DataFrame is None or empty")
-            return None
-
-        if not QueryAnalyzer.subject_terms_match_columns(df, query.lower()):
-            print("[chart_generator] Query terms don't match dataset columns. Skipping chart.")
-            return None
-
-        strategy = ChartStrategyFactory.get_strategy(query, code)
-        result = strategy.generate(df, query)
-        
-        # Fallback to bar chart if Code Strategy failed 
-        if result is None and isinstance(strategy, CodeStrategy):
-            fallback_strategy = ChartStrategyFactory.get_strategy(query, code=None)
-            result = fallback_strategy.generate(df, query)
-
-        return result
-
 class ChartGeneratorService:
     """Main Orchestrator Service."""
     
