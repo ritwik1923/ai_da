@@ -1,11 +1,12 @@
 import time
 import requests
 import re
-from typing import Any, List, Optional, Dict
+from typing import Any, List, Optional
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import BaseMessage, AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import BaseMessage, AIMessage, SystemMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.callbacks import CallbackManagerForLLMRun
+from app.utils.token_usage_tracker import TokenUsageTracker
 
 class OllamaLocalLLM(BaseChatModel):
     """
@@ -73,22 +74,48 @@ class OllamaLocalLLM(BaseChatModel):
         }
 
         try:
-            response = requests.post(f"{self.base_url}/api/chat", json=payload, timeout=120)
+            response = requests.post(f"{self.base_url}/api/chat", json=payload)
             response.raise_for_status()
-            
-            raw_text = response.json().get("message", {}).get("content", "")
+
+            response_json = response.json()
+            raw_text = response_json.get("message", {}).get("content", "")
+
+            prompt_tokens = int(response_json.get("prompt_eval_count", 0) or 0)
+            completion_tokens = int(response_json.get("eval_count", 0) or 0)
             
             # Post-processing repair
             clean_text = self._repair_response(raw_text)
             
             duration = time.time() - start_time
+            usage_record = TokenUsageTracker.record(
+                model=self.model,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                duration_seconds=duration,
+            )
             print(f"--- [M4 GPU] {self.model} | {duration:.2f}s | ctx: {current_ctx} ---")
+
+            response_metadata = {
+                "token_usage": {
+                    "prompt_tokens": usage_record.prompt_tokens,
+                    "completion_tokens": usage_record.completion_tokens,
+                    "total_tokens": usage_record.total_tokens,
+                },
+                "model": self.model,
+                "duration_seconds": usage_record.duration_seconds,
+            }
+
+            return ChatResult(
+                generations=[
+                    ChatGeneration(
+                        message=AIMessage(content=clean_text, response_metadata=response_metadata)
+                    )
+                ]
+            )
             
-            return ChatResult(generations=[ChatGeneration(message=AIMessage(content=clean_text))])
-            
-        except Exception as e:
+        except requests.exceptions.RequestException as e:
             print(f"--- [M4 Error] {self.model} failed: {str(e)} ---")
-            raise ValueError(f"Ollama local connection failed: {str(e)}")
+            raise ValueError(f"Ollama local connection failed: {str(e)}") from e
 
     async def _agenerate(self, *args, **kwargs):
         """Standard sync fallback for async calls."""

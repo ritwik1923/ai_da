@@ -43,3 +43,56 @@ export interface FilePreview {
   data: any[];
   total_rows: number;
 }
+
+export interface KPIStat {
+  label: string;
+  value: string;
+}
+
+export interface KPIChart {
+  title: string;
+  data: any;
+}
+
+export interface DataQualityInsight {
+  metric: string;
+  status: 'good' | 'warning' | 'critical';
+  description: string;
+}
+
+export interface AnalysisInsight {
+  title: string;
+  description: string;
+  key_findings?: string[];
+  recommendations?: string[];
+}
+
+export interface VisualRecommendation {
+  title: string;
+  description: string;
+  suggested_query: string;
+  generated_code?: string;
+  chart_data?: any;
+}
+
+export interface KPIResponse {
+  file_id: number;
+  summary: {
+    rows: number;
+    columns: number;
+    numeric_columns: number;
+    categorical_columns: number;
+    missing_values: number;
+    missing_percent: number;
+  };
+  metrics: KPIStat[];
+  charts: KPIChart[];
+  top_categories?: Array<{ column: string; value: string; count: number }>;
+  date_insights?: string[];
+  // AI-powered analysis fields
+  data_quality?: DataQualityInsight[];
+  analysis_insights?: AnalysisInsight[];
+  ai_summary?: string;
+  key_metrics?: string[];
+  visual_recommendations?: VisualRecommendation[];
+}

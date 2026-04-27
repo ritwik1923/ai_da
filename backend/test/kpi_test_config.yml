@@ -1,0 +1,168 @@
+# KPI Chart & Analysis Test Cases Configuration
+# Similar format to test_suites.yml but for KPI-specific tests
+
+test_suites:
+  validation:
+    name: "KPI Validation Suite"
+    description: "Validates core KPI analysis and chart generation functionality"
+    tests:
+      - id: "kpi_001"
+        file_size: "small"
+        test_case: "basic_summary_generation"
+        description: "Verify basic KPI summary with small dataset"
+        expectations:
+          - should_have_rows_count
+          - should_have_column_count
+          - should_have_missing_values_metric
+          - summary_should_be_valid_json
+
+      - id: "kpi_002"
+        file_size: "small"
+        test_case: "metrics_generation"
+        description: "Validate metrics are properly generated for small file"
+        expectations:
+          - metrics_should_be_list
+          - each_metric_should_have_label
+          - each_metric_should_have_value
+          - at_least_3_metrics_required
+
+      - id: "kpi_003"
+        file_size: "small"
+        test_case: "visual_recommendations"
+        description: "Check visual recommendations are generated"
+        expectations:
+          - should_have_visual_recommendations
+          - each_visual_should_have_title
+          - each_visual_should_have_description
+          - each_visual_should_have_suggested_query
+
+      - id: "kpi_004"
+        file_size: "medium"
+        test_case: "ai_insights_generation"
+        description: "Validate AI-powered insights are generated"
+        expectations:
+          - should_have_ai_summary
+          - should_have_analysis_insights
+          - should_have_data_quality_indicators
+          - ai_summary_should_be_non_empty
+
+      - id: "kpi_005"
+        file_size: "medium"
+        test_case: "chart_data_validation"
+        description: "Verify chart data structure is correct"
+        expectations:
+          - chart_should_have_data_array
+          - chart_should_have_layout
+          - chart_data_should_be_plotly_compatible
+          - chart_should_render_without_errors
+
+  performance:
+    name: "KPI Performance Suite"
+    description: "Tests performance and optimization of KPI analysis"
+    tests:
+      - id: "kpi_perf_001"
+        file_size: "small"
+        test_case: "small_file_analysis_speed"
+        description: "Verify small file analysis completes quickly"
+        max_duration_seconds: 5
+
+      - id: "kpi_perf_002"
+        file_size: "medium"
+        test_case: "medium_file_analysis_speed"
+        description: "Verify medium file analysis completes in reasonable time"
+        max_duration_seconds: 15
+
+      - id: "kpi_perf_003"
+        file_size: "large"
+        test_case: "large_file_analysis_speed"
+        description: "Verify large file analysis completes without timeout"
+        max_duration_seconds: 30
+
+      - id: "kpi_perf_004"
+        file_size: "small"
+        test_case: "parallel_analysis_requests"
+        description: "Test multiple concurrent KPI requests"
+        concurrent_requests: 3
+        max_duration_seconds: 20
+
+  edge_cases:
+    name: "KPI Edge Cases Suite"
+    description: "Tests handling of edge cases and error conditions"
+    tests:
+      - id: "kpi_edge_001"
+        file_size: "small"
+        test_case: "missing_numeric_columns"
+        description: "Handle dataset with no numeric columns"
+        expected_behavior: "should_still_generate_kpis"
+
+      - id: "kpi_edge_002"
+        file_size: "small"
+        test_case: "all_missing_values"
+        description: "Handle columns with all missing values"
+        expected_behavior: "should_handle_gracefully"
+
+      - id: "kpi_edge_003"
+        file_size: "small"
+        test_case: "single_row_file"
+        description: "Handle single-row datasets"
+        expected_behavior: "should_still_generate_summary"
+
+  regression:
+    name: "KPI Regression Suite"
+    description: "Regression tests for known issues"
+    tests:
+      - id: "kpi_regress_001"
+        file_size: "medium"
+        test_case: "chart_data_completeness"
+        description: "Ensure all recommended charts have valid data"
+        critical: true
+        must_pass: true
+
+      - id: "kpi_regress_002"
+        file_size: "small"
+        test_case: "no_duplicate_visualizations"
+        description: "Verify no duplicate chart recommendations"
+        critical: true
+        must_pass: true
+
+      - id: "kpi_regress_003"
+        file_size: "medium"
+        test_case: "valid_json_responses"
+        description: "All responses must be valid JSON"
+        critical: true
+        must_pass: true
+
+# Configuration defaults
+defaults:
+  timeout: 120  # seconds
+  retry_on_failure: false
+  parallel_enabled: false
+  performance_tracking: true
+  log_detailed_responses: false
+
+# Test expectations reference
+expectations_reference:
+  should_have_rows_count: "Response summary should contain row count"
+  should_have_column_count: "Response summary should contain column count"
+  should_have_missing_values_metric: "Metrics should include missing values count/percent"
+  summary_should_be_valid_json: "Summary object should be valid JSON"
+  
+  metrics_should_be_list: "Metrics should be an array/list"
+  each_metric_should_have_label: "Every metric must have a 'label' field"
+  each_metric_should_have_value: "Every metric must have a 'value' field"
+  at_least_3_metrics_required: "Response should generate at least 3 metrics"
+  
+  should_have_visual_recommendations: "Response should include visual_recommendations array"
+  each_visual_should_have_title: "Every visual recommendation must have a 'title'"
+  each_visual_should_have_description: "Every visual must have a 'description'"
+  each_visual_should_have_suggested_query: "Every visual must have a 'suggested_query'"
+  
+  should_have_ai_summary: "Response should include AI-generated summary"
+  should_have_analysis_insights: "Response should include analysis insights"
+  should_have_data_quality_indicators: "Response should include data quality metrics"
+  ai_summary_should_be_non_empty: "AI summary should not be empty/null"
+  
+  chart_should_have_data_array: "Chart must have data array (Plotly format)"
+  chart_should_have_layout: "Chart must have layout object (Plotly format)"
+  chart_data_should_be_plotly_compatible: "Chart data must be compatible with Plotly"
+  chart_should_render_without_errors: "Chart data should render without JavaScript errors"
