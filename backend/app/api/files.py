@@ -5,12 +5,15 @@ import os
 from pathlib import Path
 from datetime import datetime
 import uuid
+import asyncio
+import json
 from starlette.concurrency import run_in_threadpool
 
 from app.core.database import get_db
 from app.core.config import settings, resolve_upload_path
 from app.models.models import UploadedFile
-from app.schemas.schemas import FileUploadResponse
+from app.schemas.schemas import FileUploadResponse, KPIResponse, DataQualityInsight, AnalysisInsight
+from app.agents.DataAnalystAgent import DataAnalystAgent as ai_engg
 
 router = APIRouter()
 
@@ -169,3 +172,49 @@ async def preview_file(file_id: int, limit: int = 10, db: Session = Depends(get_
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error reading file: {str(e)}")
+
+
+@router.get("/{file_id}/kpis", response_model=KPIResponse)
+async def get_file_kpis(file_id: int, db: Session = Depends(get_db)):
+    """
+    Get comprehensive KPI insights for an uploaded file with AI-powered analysis.
+    
+    This endpoint delegates all analysis logic to the DataAnalystAgent class,
+    which handles:
+    1. Data profiling and health checks
+    2. Feature-specific KPI generation  
+    3. AI-powered analysis and visualization recommendations
+    4. Automatic chart generation from AI suggestions
+    """
+    file = db.query(UploadedFile).filter(UploadedFile.id == file_id).first()
+    if not file:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    try:
+        # Load data
+        if file.file_type == '.csv':
+            df = pd.read_csv(file.file_path)
+        else:
+            df = pd.read_excel(file.file_path)
+
+        # Delegate all KPI analysis to DataAnalystAgent
+        agent = ai_engg(df=df)
+        kpi_data = await agent.generate_kpi_report()
+
+        # Return structured KPI response
+        return KPIResponse(
+            file_id=file_id,
+            summary=kpi_data['summary'],
+            data_profiling=kpi_data.get('data_profiling'),
+            metrics=kpi_data['metrics'],
+            charts=kpi_data['charts'],
+            top_categories=kpi_data['top_categories'],
+            date_insights=kpi_data['date_insights'],
+            data_quality=kpi_data['data_quality'],
+            analysis_insights=kpi_data['analysis_insights'],
+            ai_summary=kpi_data['ai_summary'],
+            key_metrics=kpi_data['key_metrics'],
+            visual_recommendations=kpi_data['visual_recommendations']
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error computing KPIs: {str(e)}")

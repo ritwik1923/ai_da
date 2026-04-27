@@ -1,0 +1,52 @@
+{
+  "timestamp": "20260412_030627",
+  "statistics": {
+    "files_uploaded": 2,
+    "kpi_generated": 2,
+    "kpi_failed": 0,
+    "chart_validations_passed": 6,
+    "chart_validations_failed": 0
+  },
+  "uploaded_files": {
+    "small": {
+      "id": 128,
+      "filename": "test_small.csv",
+      "rows": 100,
+      "size": 0.004282951354980469
+    },
+    "medium": {
+      "id": 129,
+      "filename": "test_medium.csv",
+      "rows": 1000,
+      "size": 0.046265602111816406
+    }
+  },
+  "test_results": [
+    {
+      "file_key": "small",
+      "file_id": 128,
+      "duration_seconds": 58.43169593811035,
+      "summary_valid": true,
+      "metrics_valid": true,
+      "visuals_valid": true,
+      "insights_valid": true,
+      "overall_pass": true
+    },
+    {
+      "file_key": "medium",
+      "file_id": 129,
+      "duration_seconds": 34.94239687919617,
+      "summary_valid": true,
+      "metrics_valid": true,
+      "visuals_valid": true,
+      "insights_valid": true,
+      "overall_pass": true
+    }
+  ],
+  "summary": {
+    "total_tests": 2,
+    "passed": 2,
+    "failed": 0,
+    "success_rate": "100.0%"
+  }
+}

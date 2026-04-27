@@ -131,7 +131,10 @@ class FewShotExampleStore:
             
     def _initialize_db(self, examples: list[dict]) -> FAISS:
         if not examples: raise ValueError("The 'examples' list cannot be empty.")
-        docs = [Document(page_content=ex["task"], metadata={"code": ex["code"]}) for ex in examples]
+        docs = []
+        for ex in examples:
+            metadata = {key: value for key, value in ex.items() if key != "task"}
+            docs.append(Document(page_content=ex["task"], metadata=metadata))
         return FAISS.from_documents(docs, self.embeddings)
 
     def learn_new_example(self, task_description: str, successful_code: str):
@@ -161,14 +164,31 @@ class FewShotExampleStore:
         # ... [Keep your existing get_context_string logic] ...
         if self.vector_db is None or not task_description: return ""
         try:
-            safe_k = min(k, self.vector_db.index.ntotal)
-            similar_docs = self.vector_db.similarity_search(task_description, k=safe_k)
+            similar_docs = self.get_similar_examples(task_description, k=k)
             return "\n".join([
-                f"Similar Task: {doc.page_content}\nVerified Code: {doc.metadata['code']}\n"
+                self._format_document_context(doc)
                 for doc in similar_docs
             ])
         except Exception as e:
             return ""
+
+    def get_similar_examples(self, task_description: str, k: int = 2) -> list[Document]:
+        if self.vector_db is None or not task_description:
+            return []
+        safe_k = min(k, self.vector_db.index.ntotal)
+        return self.vector_db.similarity_search(task_description, k=safe_k)
+
+    def _format_document_context(self, doc: Document) -> str:
+        lines = [f"Similar Task: {doc.page_content}"]
+        if doc.metadata.get("chart_family"):
+            lines.append(f"Chart Family: {doc.metadata['chart_family']}")
+        if doc.metadata.get("template"):
+            lines.append(f"Visualization Template: {doc.metadata['template']}")
+        if doc.metadata.get("rationale"):
+            lines.append(f"Rendering Guidance: {doc.metadata['rationale']}")
+        if doc.metadata.get("code"):
+            lines.append(f"Verified Code: {doc.metadata['code']}")
+        return "\n".join(lines) + "\n"
 
 class ReAct_FewShotExampleStore(FewShotExampleStore):
     
@@ -184,6 +204,10 @@ class ReAct_FewShotExampleStore(FewShotExampleStore):
         {
             "task": "Create a bar chart of the top 5 brands.",
             "code": "Thought: The user wants a visualization. I will pass this exact request to the analysis tool to generate a chart.\nAction: execute_analysis\nAction Input: Create a bar chart of the top 5 brands.\nObservation: Generated chart.\nThought: The chart was successfully generated.\nFinal Answer: I have generated the bar chart showing the top 5 brands for you."
+        },
+        {
+            "task": "Show price distribution by category as a KPI chart.",
+            "code": "Thought: This is a visualization-quality request, so I should use the dedicated visualization tool to retrieve the best rendering pattern from the vector DB before generating chart code.\nAction: visualisation_tool\nAction Input: Show price distribution by category as a KPI chart.\nObservation: Retrieved ranked horizontal bar guidance and generated chart code for the top categories.\nThought: I now know the correct visualization pattern and can confirm the KPI chart was prepared.\nFinal Answer: I have prepared a top-ranked category chart for price distribution using the visualization tool's reference examples."
         },
         {
             "task": "Hello! How are you?",
@@ -208,7 +232,7 @@ class ReAct_FewShotExampleStore(FewShotExampleStore):
                 f"Example Question: {doc.page_content}\nCorrect ReAct Trajectory:\n{doc.metadata['code']}"
                 for doc in similar_docs
             ])
-        except Exception as e:
+        except Exception:
             return ""   
     @property
     def vector_db_type(self) -> str:
@@ -259,7 +283,7 @@ class Code_FewShotExampleStore(FewShotExampleStore):
         },
         {
             "task": "Visualize the relationship between price and stock levels.",
-            "code": "result = px.scatter(df, x='Price', y='Stock', color='Category', title='Price vs Stock Relationship')"
+            "code": "category_summary = df.groupby('Category', dropna=False).agg(Average_Price=('Price', 'mean'), Average_Stock=('Stock', 'mean'), Product_Count=('Category', 'size')).reset_index().sort_values('Product_Count', ascending=False).head(12)\nresult = px.scatter(category_summary, x='Average_Price', y='Average_Stock', color='Category', size='Product_Count', text='Category', title='Average Price vs Average Stock by Category')\nresult.update_traces(textposition='top center')"
         },
         {
             "task": "Show the distribution of product prices.",
@@ -277,6 +301,74 @@ class Code_FewShotExampleStore(FewShotExampleStore):
     @property
     def vector_db_type(self) -> str:
         return "FewShot for Coding"
+
+
+class Visualization_FewShotExampleStore(FewShotExampleStore):
+
+    visualization_golden_examples = [
+        {
+            "task": "Price Distribution by Category",
+            "chart_family": "ranked_horizontal_bar",
+            "template": "Aggregate price by category, sort descending, and display the top 10 categories as a horizontal bar chart using a sequential blue palette.",
+            "rationale": "Category-heavy KPI charts become unreadable when every category is shown. Ranking and limiting to the top 10 makes the highest price-volume categories immediately clear.",
+            "code": "result = df.groupby('Category', dropna=False)['Price'].sum().reset_index().sort_values('Price', ascending=False).head(10)\nresult = px.bar(category_price, x='Price', y='Category', orientation='h', color='Price', color_continuous_scale='Blues', title='Top 10 Categories by Total Price')\nresult.update_layout(coloraxis_showscale=False, yaxis={'categoryorder': 'total ascending'})"
+        },
+        {
+            "task": "Top categories by stock or quantity",
+            "chart_family": "ranked_horizontal_bar",
+            "template": "Aggregate the metric by category, sort descending, and keep only the top 5 or top 10 categories before plotting.",
+            "rationale": "Top-N ranking avoids clutter and keeps category comparisons readable in KPI dashboards.",
+            "code": "result = df.groupby('Category', dropna=False)['Stock'].sum().reset_index().sort_values('Stock', ascending=False).head(10)\nresult = px.bar(top_categories, x='Stock', y='Category', orientation='h', color='Stock', color_continuous_scale='Tealgrn', title='Top 10 Categories by Stock')\nresult.update_layout(coloraxis_showscale=False, yaxis={'categoryorder': 'total ascending'})"
+        },
+        {
+            "task": "Relationship between two metrics by category",
+            "chart_family": "aggregated_bubble_scatter",
+            "template": "Aggregate both metrics by category, show one labeled point per category, and use bubble size for record count.",
+            "rationale": "For KPI relationship charts, aggregated labeled bubbles preserve the comparison while avoiding unreadable point clouds.",
+            "code": "result = df.groupby('Category', dropna=False).agg(Average_Price=('Price', 'mean'), Average_Stock=('Stock', 'mean'), Product_Count=('Category', 'size')).reset_index().sort_values('Product_Count', ascending=False).head(12)\nresult = px.scatter(category_summary, x='Average_Price', y='Average_Stock', color='Category', size='Product_Count', title='Average Price vs Average Stock by Category')\nfor trace in result.data:\n    trace.text = [trace.name] * len(trace.x)\n    trace.mode = 'markers+text'\n    trace.textposition = 'top center'"
+        },
+        {
+            "task": "Trend of a metric over time",
+            "chart_family": "time_series_line",
+            "template": "Aggregate the metric over the date column and show a line chart with the date on the x-axis and the metric on the y-axis.",
+            "rationale": "Line charts are the clearest way to show movement over time for KPI monitoring.",
+            "code": "trend_data = df.groupby('OrderDate', dropna=False)['Price'].mean().reset_index().sort_values('OrderDate')\nresult = px.line(trend_data, x='OrderDate', y='Price', title='Average Price Over Time')"
+        },
+        {
+            "task": "Distribution of a numeric metric",
+            "chart_family": "numeric_distribution",
+            "template": "Use a histogram or box plot to show the spread of a numeric column and identify skew or outliers.",
+            "rationale": "A distribution view highlights concentration, skew, and outliers that summary statistics can miss.",
+            "code": "result = px.histogram(df, x='Price', nbins=30, title='Distribution of Price')"
+        },
+        {
+            "task": "Breakdown of a metric by a secondary segment",
+            "chart_family": "secondary_breakdown_bar",
+            "template": "Aggregate the metric by a secondary categorical column and use a sorted bar chart to compare segment performance.",
+            "rationale": "A secondary breakdown adds a different business lens when the primary category ranking is already shown.",
+            "code": "result = df.groupby('Region', dropna=False)['Price'].sum().reset_index().sort_values('Price', ascending=False).head(10)\nresult = px.bar(segment_data, x='Region', y='Price', title='Top Regions by Total Price')"
+        },
+        {
+            "task": "Ranking of categories by a metric",
+            "chart_family": "ranked_horizontal_bar",
+            "template": "Aggregate the metric by category, sort descending, and display the top categories as a horizontal bar chart using an appropriate color palette.",
+            "rationale": "Ranking is a fundamental pattern for category-heavy KPI charts to maintain readability and highlight top performers.",
+            "code": "result = df.groupby('Category', dropna=False)['Price'].sum().reset_index().sort_values('Price', ascending=False).head(10)\nresult = px.bar(category_price, x='Price', y='Category', orientation='h', color='Price', color_continuous_scale='Blues', title='Top 10 Categories by Total Price')\nresult.update_layout(coloraxis_showscale=False, yaxis={'categoryorder': 'total ascending'})"
+            
+        },
+        
+    ]
+
+    def __init__(self, embeddings_model):
+        super().__init__(
+            embeddings_model=embeddings_model,
+            examples=self.visualization_golden_examples,
+            db_path="./agent_memory/visualization_brain"
+        )
+
+    @property
+    def vector_db_type(self) -> str:
+        return "FewShot for Visualization"
     
 
 # def inspect_brain(brain_path: str):

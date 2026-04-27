@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     
     # Database
     DATABASE_URL: str = "postgresql://ai_analyst:secure_password_123@localhost:5432/ai_data_analyst"
+    ENVIRONMENT: str = "development"  # Options: development, production
     
     # LLM Provider Settings
     # LLM_PROVIDER: str = "openai"  # Options: "openai" or "company"
@@ -55,7 +56,7 @@ class Settings(BaseSettings):
     
     # File Upload
     UPLOAD_DIR: str = str(BACKEND_DIR / "uploads")
-    MAX_FILE_SIZE: int = 10 * 1024 * 1024  # 10MB
+    MAX_FILE_SIZE: int = 50 * 1024 * 1024  # 50MB
     ALLOWED_EXTENSIONS: Union[List[str], str] = ".csv,.xlsx,.xls"
     
     @field_validator('ALLOWED_EXTENSIONS', mode='before')
