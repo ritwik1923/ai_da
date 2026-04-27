@@ -1,0 +1,106 @@
+file: /Users/rwk3030/Downloads/organizations-100.csv
+test_cases:  
+# ==========================================
+  # Test Suite 1: Organizations Data 
+  # Target File: organizations-100.csv
+  # Focus: Aggregations, Min/Max, Numeric calculations
+  # ==========================================
+  - id: 1
+    query: "What is the exact median number of employees across all organizations?"
+    expected_snippet: ".median()"
+    expected_val: "4941.5"
+  
+  - id: 2
+    query: "What is the name and employee count of the single largest organization by number of employees?"
+    expected_snippet: ".max()"
+    expected_val: "9995"
+
+  - id: 3
+    query: "What is the minimum number of employees any organization has in the dataset?"
+    expected_snippet: ".min()"
+    expected_val: "236"
+
+  - id: 4
+    query: "How many unique industries are represented in the organizations dataset?"
+    expected_snippet: ".nunique()"
+    expected_val: "72"
+
+  - id: 5
+    query: "What is the total combined number of employees across all 100 organizations?"
+    expected_snippet: ".sum()"
+    expected_val: "496486"
+
+  - id: 6
+    query: "What is the oldest founding year among all organizations?"
+    expected_snippet: ".min()"
+    expected_val: "1970"
+
+  - id: 7
+    query: "What is the most recent founding year among all organizations?"
+    expected_snippet: ".max()"
+    expected_val: "2021"
+
+  - id: 8
+    query: "What is the average number of employees per organization?"
+    expected_snippet: ".mean()"
+    expected_val: "4964.86"
+
+  - id: 9
+    query: "How many organizations have strictly greater than 5000 employees?"
+    expected_snippet: ">"
+    expected_val: "48"
+
+  - id: 10
+    query: "How many organizations were founded in or before 1999?"
+    expected_snippet: "<="
+    expected_val: "61"
+
+  - id: 11
+    query: "How many organizations were founded in the year 2000 or later?"
+    expected_snippet: ">="
+    expected_val: "39"
+
+  - id: 12
+    query: "Which country has the most organizations headquartered in it?"
+    expected_snippet: "mode"
+    expected_val: "Benin"
+
+  - id: 13
+    query: "Exactly how many organizations are located in Benin?"
+    expected_snippet: "=="
+    expected_val: "3"
+
+  - id: 14
+    query: "What is the character count of the longest organization name?"
+    expected_snippet: ".str.len().max()"
+    expected_val: "31"
+
+  - id: 15
+    query: "How many organizations have the word 'Group' in their name?"
+    expected_snippet: ".str.contains"
+    expected_val: "5"
+
+  - id: 16
+    query: "What is the total sum of employees working specifically in the 'Plastics' industry?"
+    expected_snippet: "=="
+    expected_val: "25894"
+
+  - id: 17
+    query: "How many unique countries are present in the organizations dataset?"
+    expected_snippet: ".nunique()"
+    expected_val: "84"
+
+  - id: 18
+    query: "How many organizations have a website URL starting with 'http://' (not https)?"
+    expected_snippet: ".str.startswith"
+    expected_val: "49"
+
+  - id: 19
+    query: "What is the character length of the shortest organization name?"
+    expected_snippet: ".str.len().min()"
+    expected_val: "8"
+
+  - id: 20
+    query: "What is the specific name of the oldest organization in the dataset?"
+    expected_snippet: "=="
+    expected_val: "Mcintosh-Mora"

@@ -1,0 +1,107 @@
+file_name: /Users/rwk3030/Downloads/people-100.csv
+
+test_cases:
+  # ==========================================
+  # Test Suite 2: People Data 
+  # Target File: people-100.csv
+  # Focus: String matching, Categorical counts, Date parsing
+  # ==========================================
+  - id: 21
+    query: "How many people in the dataset identify as Female?"
+    expected_snippet: "value_counts"
+    expected_val: "53"
+
+  - id: 22
+    query: "How many people in the dataset identify as Male?"
+    expected_snippet: "value_counts"
+    expected_val: "47"
+
+  - id: 23
+    query: "How many distinct, unique job titles exist in the people dataset?"
+    expected_snippet: ".nunique()"
+    expected_val: "91"
+
+  - id: 24
+    query: "What is the absolute most common job title in the dataset?"
+    expected_snippet: "mode"
+    expected_val: "Biochemist, clinical"
+
+  - id: 25
+    query: "What is the average character length of the 'First Name' field across all people?"
+    expected_snippet: ".str.len().mean()"
+    expected_val: "5.99"
+
+  - id: 26
+    query: "What is the character count of the longest 'Last Name' in the dataset?"
+    expected_snippet: ".str.len().max()"
+    expected_val: "10"
+
+  - id: 27
+    query: "How many people in the dataset were born strictly before the year 1980?"
+    expected_snippet: ".dt.year < 1980"
+    expected_val: "60"
+
+  - id: 28
+    query: "How many people were born in the year 2000 or later?"
+    expected_snippet: ".dt.year >="
+    expected_val: "22"
+
+  - id: 29
+    query: "What is the birth year of the oldest person in the dataset?"
+    expected_snippet: ".min()"
+    expected_val: "1908"
+
+  - id: 30
+    query: "What is the birth year of the youngest person in the dataset?"
+    expected_snippet: ".max()"
+    expected_val: "2021"
+
+  - id: 31
+    query: "How many people have an email address ending in 'example.com'?"
+    expected_snippet: ".str.endswith"
+    expected_val: "26"
+
+  - id: 32
+    query: "How many people have an email address ending in 'example.net'?"
+    expected_snippet: ".str.endswith"
+    expected_val: "35"
+
+  - id: 33
+    query: "How many people have an email address ending in 'example.org'?"
+    expected_snippet: ".str.endswith"
+    expected_val: "39"
+
+  - id: 34
+    query: "Exactly how many people have the First Name 'Shelby'?"
+    expected_snippet: "=="
+    expected_val: "1"
+
+  - id: 35
+    query: "How many job titles contain the word 'manager' (case insensitive)?"
+    expected_snippet: ".str.contains"
+    expected_val: "11"
+
+  - id: 36
+    query: "How many people have the letter 'Z' or 'z' in their last name?"
+    expected_snippet: ".str.contains"
+    expected_val: "3"
+
+  - id: 37
+    query: "How many unique domain names are used across all email addresses?"
+    expected_snippet: "nunique"
+    expected_val: "3"
+
+  - id: 38
+    query: "How many people were born in the month of August?"
+    expected_snippet: ".dt.month =="
+    expected_val: "11"
+
+  - id: 39
+    query: "What is the exact median birth year of the people in this dataset?"
+    expected_snippet: ".median()"
+    expected_val: "1962.0"
+
+  - id: 40
+    query: "If you combined every email address into one long string, how many characters would it be?"
+    expected_snippet: ".sum()"
+    expected_val: "2166"
