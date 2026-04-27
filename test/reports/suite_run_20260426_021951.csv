@@ -1,0 +1,36 @@
+row_type,run_timestamp,case_id,attempt_number,session_id,original_query,sent_message,expected_value,response,generated_code,message_id,matched_expected,final_case_status,case_elapsed_time_sec,attempt_elapsed_time_sec,feedback_sent,error,metric_name,metric_value
+attempt,20260426_021951,21,1,suite_20260426_021951_21,How many people in the dataset identify as Female?,How many people in the dataset identify as Female?,53,53,result = df[df['Sex'] == 'Female'].shape[0],1969,True,passed,13.37,13.35,True,,,
+attempt,20260426_021951,22,1,suite_20260426_021951_22,How many people in the dataset identify as Male?,How many people in the dataset identify as Male?,47,47,result = df[df['Sex'] == 'Male'].shape[0],1970,True,passed,20.37,20.36,True,,,
+attempt,20260426_021951,23,1,suite_20260426_021951_23,"How many distinct, unique job titles exist in the people dataset?","How many distinct, unique job titles exist in the people dataset?",91,91,result = df['Job Title'].nunique(),1971,True,passed,30.38,30.37,True,,,
+attempt,20260426_021951,24,1,suite_20260426_021951_24,What is the absolute most common job title in the dataset?,What is the absolute most common job title in the dataset?,"Biochemist, clinical","Biochemist, clinical",result = df['Job Title'].mode()[0],1972,True,passed,35.46,35.45,True,,,
+attempt,20260426_021951,25,1,suite_20260426_021951_25,What is the average character length of the 'First Name' field across all people?,What is the average character length of the 'First Name' field across all people?,5.99,5.99,result = df['First Name'].astype(str).str.len().mean(),1938,True,passed,0.17,0.16,True,,,
+attempt,20260426_021951,26,1,suite_20260426_021951_26,What is the character count of the longest 'Last Name' in the dataset?,What is the character count of the longest 'Last Name' in the dataset?,10,10,result = df['Last Name'].astype(str).str.len().max(),1940,True,passed,0.06,0.03,True,,,
+attempt,20260426_021951,27,1,suite_20260426_021951_27,How many people in the dataset were born strictly before the year 1980?,How many people in the dataset were born strictly before the year 1980?,60,60,"result = pd.to_datetime(df['Date of birth'], errors='coerce').dt.year.lt(1980).sum()",1942,True,passed,0.08,0.07,True,,,
+attempt,20260426_021951,28,1,suite_20260426_021951_28,How many people were born in the year 2000 or later?,How many people were born in the year 2000 or later?,22,22,"result = pd.to_datetime(df['Date of birth'], errors='coerce').dt.year.ge(2000).sum()",1944,True,passed,0.04,0.03,True,,,
+attempt,20260426_021951,29,1,suite_20260426_021951_29,What is the birth year of the oldest person in the dataset?,What is the birth year of the oldest person in the dataset?,1908,1908,"result = pd.to_datetime(df['Date of birth'], errors='coerce').dt.year.min()",1946,True,passed,0.03,0.02,True,,,
+attempt,20260426_021951,30,1,suite_20260426_021951_30,What is the birth year of the youngest person in the dataset?,What is the birth year of the youngest person in the dataset?,2021,2021,"result = pd.to_datetime(df['Date of birth'], errors='coerce').dt.year.max()",1948,True,passed,0.03,0.02,True,,,
+attempt,20260426_021951,31,1,suite_20260426_021951_31,How many people have an email address ending in 'example.com'?,How many people have an email address ending in 'example.com'?,26,26,"result = df['Email'].astype(str).str.endswith('example.com', na=False).sum()",1950,True,passed,0.03,0.02,True,,,
+attempt,20260426_021951,32,1,suite_20260426_021951_32,How many people have an email address ending in 'example.net'?,How many people have an email address ending in 'example.net'?,35,35,"result = df['Email'].astype(str).str.endswith('example.net', na=False).sum()",1952,True,passed,0.03,0.02,True,,,
+attempt,20260426_021951,33,1,suite_20260426_021951_33,How many people have an email address ending in 'example.org'?,How many people have an email address ending in 'example.org'?,39,39,"result = df['Email'].astype(str).str.endswith('example.org', na=False).sum()",1954,True,passed,0.03,0.02,True,,,
+attempt,20260426_021951,34,1,suite_20260426_021951_34,Exactly how many people have the First Name 'Shelby'?,Exactly how many people have the First Name 'Shelby'?,1,1,result = df[df['First Name'] == 'Shelby'].shape[0],1956,True,passed,0.03,0.02,True,,,
+attempt,20260426_021951,35,1,suite_20260426_021951_35,How many job titles contain the word 'manager' (case insensitive)?,How many job titles contain the word 'manager' (case insensitive)?,11,11,"result = df['Job Title'].astype(str).str.contains('manager', case=False, na=False).sum()",1958,True,passed,0.04,0.03,True,,,
+attempt,20260426_021951,36,1,suite_20260426_021951_36,How many people have the letter 'Z' or 'z' in their last name?,How many people have the letter 'Z' or 'z' in their last name?,3,3,"result = df['Last Name'].astype(str).str.contains('Z', case=False, na=False).sum()",1960,True,passed,0.03,0.02,True,,,
+attempt,20260426_021951,37,1,suite_20260426_021951_37,How many unique domain names are used across all email addresses?,How many unique domain names are used across all email addresses?,3,3,result = df['Email'].astype(str).str.split('@').str[-1].nunique(),1962,True,passed,0.03,0.02,True,,,
+attempt,20260426_021951,38,1,suite_20260426_021951_38,How many people were born in the month of August?,How many people were born in the month of August?,11,11,"result = pd.to_datetime(df['Date of birth'], errors='coerce').dt.month.eq(8).sum()",1964,True,passed,0.03,0.02,True,,,
+attempt,20260426_021951,39,1,suite_20260426_021951_39,What is the exact median birth year of the people in this dataset?,What is the exact median birth year of the people in this dataset?,1962.0,1962.0,"result = pd.to_datetime(df['Date of birth'], errors='coerce').dt.year.median()",1966,True,passed,0.03,0.02,True,,,
+attempt,20260426_021951,40,1,suite_20260426_021951_40,"If you combined every email address into one long string, how many characters would it be?","If you combined every email address into one long string, how many characters would it be?",2166,2166,result = df['Email'].astype(str).str.len().sum(),1968,True,passed,0.03,0.02,True,,,
+summary,20260426_021951,,,,,,,,,,,,,,,,total_cases,20
+summary,20260426_021951,,,,,,,,,,,,,,,,passed_cases,20
+summary,20260426_021951,,,,,,,,,,,,,,,,failed_cases,0
+summary,20260426_021951,,,,,,,,,,,,,,,,pass_rate_pct,100.0
+summary,20260426_021951,,,,,,,,,,,,,,,,total_attempts,20
+summary,20260426_021951,,,,,,,,,,,,,,,,avg_attempts_per_case,1.0
+summary,20260426_021951,,,,,,,,,,,,,,,,successful_attempts,20
+summary,20260426_021951,,,,,,,,,,,,,,,,attempt_success_rate_pct,100.0
+summary,20260426_021951,,,,,,,,,,,,,,,,avg_attempt_latency_sec,5.0
+summary,20260426_021951,,,,,,,,,,,,,,,,max_attempt_latency_sec,35.45
+summary,20260426_021951,,,,,,,,,,,,,,,,avg_case_latency_sec,5.01
+summary,20260426_021951,,,,,,,,,,,,,,,,max_case_latency_sec,35.46
+summary,20260426_021951,,,,,,,,,,,,,,,,total_suite_time_sec,35.53
+summary,20260426_021951,,,,,,,,,,,,,,,,concurrency,5
+summary,20260426_021951,,,,,,,,,,,,,,,,max_retries,2

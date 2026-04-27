@@ -1,12 +1,19 @@
 import time
-import requests
+import asyncio
 import re
-from typing import Any, List, Optional
+from typing import Any, ClassVar, Dict, List, Optional
+
+import httpx
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import BaseMessage, AIMessage, SystemMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.callbacks import CallbackManagerForLLMRun
-from app.utils.token_usage_tracker import TokenUsageTracker
+
+from app.core.config import settings
+
+
+_OLLAMA_CONCURRENCY_LIMIT = max(1, settings.OLLAMA_MAX_CONCURRENT_REQUESTS)
+_OLLAMA_TIMEOUT = httpx.Timeout(settings.OLLAMA_TIMEOUT_SECONDS)
 
 class OllamaLocalLLM(BaseChatModel):
     """
@@ -18,6 +25,9 @@ class OllamaLocalLLM(BaseChatModel):
     temperature: float = 0.0
     num_ctx: int = 4096 # Default context
     num_thread: int = 8  # Optimized for M4 Performance Cores
+    _async_client: ClassVar[httpx.AsyncClient | None] = None
+    _sync_client: ClassVar[httpx.Client | None] = None
+    _request_semaphore: ClassVar[asyncio.Semaphore] = asyncio.Semaphore(_OLLAMA_CONCURRENCY_LIMIT)
 
     @property
     def _llm_type(self) -> str:
@@ -40,6 +50,57 @@ class OllamaLocalLLM(BaseChatModel):
 
         return content.strip()
 
+    @classmethod
+    def _get_async_client(cls) -> httpx.AsyncClient:
+        if cls._async_client is None:
+            cls._async_client = httpx.AsyncClient(timeout=_OLLAMA_TIMEOUT)
+        return cls._async_client
+
+    @classmethod
+    def _get_sync_client(cls) -> httpx.Client:
+        if cls._sync_client is None:
+            cls._sync_client = httpx.Client(timeout=_OLLAMA_TIMEOUT)
+        return cls._sync_client
+
+    def _to_ollama_messages(self, messages: List[BaseMessage]) -> List[Dict[str, Any]]:
+        ollama_messages = []
+        for m in messages:
+            role = "user"
+            if isinstance(m, SystemMessage):
+                role = "system"
+            elif isinstance(m, AIMessage):
+                role = "assistant"
+            ollama_messages.append({"role": role, "content": m.content})
+        return ollama_messages
+
+    def _build_payload(self, messages: List[BaseMessage], stop: Optional[List[str]]) -> tuple[Dict[str, Any], int]:
+        current_ctx = 8192 if "deepseek" in self.model.lower() else self.num_ctx
+        payload = {
+            "model": self.model,
+            "messages": self._to_ollama_messages(messages),
+            "stream": False,
+            "options": {
+                "temperature": self.temperature,
+                "num_ctx": current_ctx,
+                "num_thread": self.num_thread,
+                "stop": stop or ["Observation:", "\nObservation:", "Thought:"],
+            },
+        }
+        return payload, current_ctx
+
+    def _build_chat_result(self, response_json: Dict[str, Any], start_time: float, current_ctx: int) -> ChatResult:
+        raw_text = response_json.get("message", {}).get("content", "")
+        clean_text = self._repair_response(raw_text)
+
+        duration = time.time() - start_time
+        print(f"--- [M4 GPU] {self.model} | {duration:.2f}s | ctx: {current_ctx} ---")
+
+        return ChatResult(generations=[ChatGeneration(message=AIMessage(content=clean_text))])
+
+    @staticmethod
+    def _wrap_transport_error(error: Exception) -> ValueError:
+        return ValueError(f"Ollama local connection failed: {str(error)}")
+
     def _generate(
         self,
         messages: List[BaseMessage],
@@ -47,79 +108,39 @@ class OllamaLocalLLM(BaseChatModel):
         run_manager: Optional[CallbackManagerForLLMRun] = None,
         **kwargs: Any,
     ) -> ChatResult:
+        del run_manager, kwargs
         start_time = time.time()
-
-        # Convert LangChain objects to Ollama Chat JSON
-        ollama_messages = []
-        for m in messages:
-            role = "user"
-            if isinstance(m, SystemMessage): role = "system"
-            elif isinstance(m, AIMessage): role = "assistant"
-            ollama_messages.append({"role": role, "content": m.content})
-
-        # DeepSeek-Coder needs larger context for 1000+ column schemas
-        # We auto-bump context if using the heavy model
-        current_ctx = 8192 if "deepseek" in self.model.lower() else self.num_ctx
-
-        payload = {
-            "model": self.model,
-            "messages": ollama_messages,
-            "stream": False,
-            "options": {
-                "temperature": self.temperature,
-                "num_ctx": current_ctx,
-                "num_thread": self.num_thread,
-                "stop": stop or ["Observation:", "\nObservation:", "Thought:"]
-            }
-        }
+        payload, current_ctx = self._build_payload(messages, stop)
 
         try:
-            response = requests.post(f"{self.base_url}/api/chat", json=payload)
+            response = self._get_sync_client().post(f"{self.base_url}/api/chat", json=payload)
             response.raise_for_status()
-
-            response_json = response.json()
-            raw_text = response_json.get("message", {}).get("content", "")
-
-            prompt_tokens = int(response_json.get("prompt_eval_count", 0) or 0)
-            completion_tokens = int(response_json.get("eval_count", 0) or 0)
-            
-            # Post-processing repair
-            clean_text = self._repair_response(raw_text)
-            
-            duration = time.time() - start_time
-            usage_record = TokenUsageTracker.record(
-                model=self.model,
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-                duration_seconds=duration,
-            )
-            print(f"--- [M4 GPU] {self.model} | {duration:.2f}s | ctx: {current_ctx} ---")
-
-            response_metadata = {
-                "token_usage": {
-                    "prompt_tokens": usage_record.prompt_tokens,
-                    "completion_tokens": usage_record.completion_tokens,
-                    "total_tokens": usage_record.total_tokens,
-                },
-                "model": self.model,
-                "duration_seconds": usage_record.duration_seconds,
-            }
-
-            return ChatResult(
-                generations=[
-                    ChatGeneration(
-                        message=AIMessage(content=clean_text, response_metadata=response_metadata)
-                    )
-                ]
-            )
-            
-        except requests.exceptions.RequestException as e:
+            return self._build_chat_result(response.json(), start_time, current_ctx)
+        except Exception as e:
             print(f"--- [M4 Error] {self.model} failed: {str(e)} ---")
-            raise ValueError(f"Ollama local connection failed: {str(e)}") from e
+            raise self._wrap_transport_error(e) from e
 
-    async def _agenerate(self, *args, **kwargs):
-        """Standard sync fallback for async calls."""
-        return self._generate(*args, **kwargs)
+    async def _agenerate(
+        self,
+        messages: List[BaseMessage],
+        stop: Optional[List[str]] = None,
+        run_manager: Optional[CallbackManagerForLLMRun] = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        """Async Ollama call with a shared client and bounded concurrency."""
+        del run_manager, kwargs
+
+        start_time = time.time()
+        payload, current_ctx = self._build_payload(messages, stop)
+
+        async with self._request_semaphore:
+            try:
+                response = await self._get_async_client().post(f"{self.base_url}/api/chat", json=payload)
+                response.raise_for_status()
+                return self._build_chat_result(response.json(), start_time, current_ctx)
+            except Exception as e:
+                print(f"--- [M4 Error] {self.model} failed: {str(e)} ---")
+                raise self._wrap_transport_error(e) from e
 
 # """
 # Custom LLM wrapper for company's GenAI API

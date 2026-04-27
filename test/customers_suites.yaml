@@ -1,0 +1,102 @@
+file_name: /Users/rwk3030/Downloads/customers-100.csv
+
+test_cases:
+  - id: 41
+    query: "How many unique countries are customers from?"
+    expected_snippet: ".nunique()"
+    expected_val: "85"
+
+  - id: 42
+    query: "Exactly how many customers are located in 'Chile'?"
+    expected_snippet: "=="
+    expected_val: "1"
+
+  - id: 43
+    query: "How many customer company names contain the exact word 'Group'?"
+    expected_snippet: ".str.contains"
+    expected_val: "6"
+
+  - id: 44
+    query: "If we group subscriptions by year, what was the highest number of subscriptions in a single year?"
+    expected_snippet: ".max()"
+    expected_val: "43"
+
+  - id: 45
+    query: "Which specific year had the highest number of new customer subscriptions?"
+    expected_snippet: ".idxmax()"
+    expected_val: "2021"
+
+  - id: 46
+    query: "Are there any customers missing their 'Phone 2' number? How many?"
+    expected_snippet: ".isna().sum()"
+    expected_val: "0"
+
+  - id: 47
+    query: "What is the character length of the longest Customer Company name?"
+    expected_snippet: ".str.len().max()"
+    expected_val: "31"
+
+  - id: 48
+    query: "Exactly how many customer subscriptions occurred in the year 2020?"
+    expected_snippet: "=="
+    expected_val: "38"
+
+  - id: 49
+    query: "Exactly how many customer subscriptions occurred in the year 2021?"
+    expected_snippet: "=="
+    expected_val: "43"
+
+  - id: 50
+    query: "Exactly how many customer subscriptions occurred in the year 2022?"
+    expected_snippet: "=="
+    expected_val: "19"
+
+  - id: 51
+    query: "How many totally unique cities are represented in the dataset?"
+    expected_snippet: ".nunique()"
+    expected_val: "100"
+
+  - id: 52
+    query: "What is the average character length of customer First Names?"
+    expected_snippet: ".str.len().mean()"
+    expected_val: "5.89"
+
+  - id: 53
+    query: "How many customer websites use the secure 'https://' protocol?"
+    expected_snippet: ".str.startswith"
+    expected_val: "43"
+
+  - id: 54
+    query: "How many customers have a First Name and Last Name that are exactly the same length?"
+    expected_snippet: "=="
+    expected_val: "23"
+
+  - id: 55
+    query: "How many unique email domains do the customers use?"
+    expected_snippet: ".nunique()"
+    expected_val: "98"
+
+  - id: 56
+    query: "How many company names contain the acronym 'LLC'?"
+    expected_snippet: ".str.contains"
+    expected_val: "6"
+
+  - id: 57
+    query: "What is the character length of the shortest customer Company name?"
+    expected_snippet: ".str.len().min()"
+    expected_val: "8"
+
+  - id: 58
+    query: "What is the earliest recorded Subscription Date in the dataset?"
+    expected_snippet: ".min()"
+    expected_val: "2020-01-13"
+
+  - id: 59
+    query: "What is the most recent (latest) Subscription Date in the dataset?"
+    expected_snippet: ".max()"
+    expected_val: "2022-05-26"
+
+  - id: 60
+    query: "How many customers have a First Name that starts with the letter 'A'?"
+    expected_snippet: ".str.startswith"
+    expected_val: "5"
