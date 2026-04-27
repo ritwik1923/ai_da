@@ -5,6 +5,7 @@ from datetime import datetime
 import time
 from starlette.concurrency import run_in_threadpool
 
+from app.core.config import resolve_upload_path
 from app.core.database import get_db
 from app.models.models import UploadedFile, AnalysisResult
 from app.schemas.schemas import AnalysisRequest, AnalysisResponse
@@ -39,7 +40,7 @@ async def analyze_data(
         raise HTTPException(status_code=404, detail="File not found")
     
     try:
-        df = await run_in_threadpool(_load_dataframe, file.file_type, file.file_path)
+        df = await run_in_threadpool(_load_dataframe, file.file_type, resolve_upload_path(file.file_path))
         
         # Measure execution time
         start_time = time.time()

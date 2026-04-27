@@ -67,24 +67,6 @@ class CodeGenerationService:
         coding_prompt = self._build_prompt(task_description, examples_str)
 
         # """
-        # coding_prompt = f"""
-        # Generate Python3.9 code to answer the task.
-        
-        # Task: {task_description}
-        # Schema Context: {self.df.columns.tolist()}
-        
-        # ### VERIFIED EXAMPLES (MIMIC THIS EXACT STYLE & SYNTAX) ###
-        # {examples_str}
-        
-        # ### EXECUTION CONTRACT ###
-        # 1. OUTPUT FORMAT: Generate pure Python code only. No markdown, no backticks, no explanatory text.
-        # 2. RESULT VARIABLE: You must assign your final answer or Plotly figure exactly to a variable named `result`. Do NOT use `print()` or `return`.
-        # 3. STRICT PANDAS: Mimic the verified examples. Use idiomatic Pandas operations on the provided `df`. Do NOT create dummy data, do NOT use standard `for` loops, and do NOT use `+=` assignments.
-        # 4. CHARTS: If building a chart, you MUST use `plotly.express` as `px`. 
-        # 5. RESULT VARIABLE: You MUST assign the final Plotly figure DIRECTLY to a variable named `result` (e.g., `result = px.line(...)`). Do NOT assign it to `fig`.
-        # 6. SERVER SAFETY CRITICAL: Do NOT use `.show()` under any circumstances. Calling `.show()` will crash the backend server.
-        # 7. OUTPUT FORMAT: Generate pure Python code only. Do not wrap the code in markdown blocks (```python).
-        # """
         response = self.llm.invoke(coding_prompt)
         raw_code = response.content if hasattr(response, 'content') else str(response)
         clean_code = CodeSanitizer.CodeSanitizer.sanitize(raw_code)

@@ -1,6 +1,17 @@
 from pydantic_settings import BaseSettings
 from typing import List, Union
 from pydantic import field_validator
+from pathlib import Path
+
+
+BACKEND_DIR = Path(__file__).resolve().parents[2]
+
+
+def resolve_upload_path(file_path: str) -> str:
+    path = Path(file_path)
+    if path.is_absolute():
+        return str(path)
+    return str((BACKEND_DIR / path).resolve())
 
 
 class Settings(BaseSettings):
@@ -11,7 +22,8 @@ class Settings(BaseSettings):
     
     # Database
     DATABASE_URL: str = "postgresql://ai_analyst:secure_password_123@localhost:5432/ai_data_analyst"
-    ENVIRONMENT: str = "development"  # Options: "development" or "production"
+    ENVIRONMENT: str = "development"  # Options: development, production
+    
     # LLM Provider Settings
     # LLM_PROVIDER: str = "openai"  # Options: "openai" or "company"
     LLM_PROVIDER: str = "local_llm"  # Options: "openai" or "company"
@@ -43,8 +55,8 @@ class Settings(BaseSettings):
         return v
     
     # File Upload
-    UPLOAD_DIR: str = "./uploads"
-    MAX_FILE_SIZE: int = 500000 * 1024 * 1024  # 50MB - allows uploads up to 12MB+ with Starlette overhead
+    UPLOAD_DIR: str = str(BACKEND_DIR / "uploads")
+    MAX_FILE_SIZE: int = 50 * 1024 * 1024  # 50MB
     ALLOWED_EXTENSIONS: Union[List[str], str] = ".csv,.xlsx,.xls"
     
     @field_validator('ALLOWED_EXTENSIONS', mode='before')
@@ -58,6 +70,8 @@ class Settings(BaseSettings):
     MAX_ITERATIONS: int = 150
     LOCAL_LLM_MAX_ITERATIONS: int = 50  # Low for local models; Mistral typically completes in 3-4 iterations
     OLLAMA_MODEL: str = "mistral"  # Mistral is more instruction-following than llama3
+    OLLAMA_TIMEOUT_SECONDS: int = 120
+    OLLAMA_MAX_CONCURRENT_REQUESTS: int = 15
     AGENT_VERBOSE: bool = True
     
     class Config:

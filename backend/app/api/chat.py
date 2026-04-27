@@ -5,6 +5,7 @@ import uuid, json, asyncio
 from datetime import datetime
 from starlette.concurrency import run_in_threadpool
 
+from app.core.config import resolve_upload_path
 from app.core.database import get_db
 from app.models.models import Conversation, Message, UploadedFile
 from app.schemas.schemas import ChatRequest, ChatResponse, ConversationHistory, ChatMessage, FeedbackRequest
@@ -48,10 +49,11 @@ async def send_message(
         db.add(conversation)
         db.commit()
         db.refresh(conversation)
+    conversation_id = conversation.id
     
     # Save user message
     user_message = Message(
-        conversation_id=conversation.id,
+        conversation_id=conversation_id,
         role="user",
         content=request.message
     )
@@ -68,7 +70,7 @@ async def send_message(
             if not file:
                 raise HTTPException(status_code=404, detail="File not found")
             
-            df = await run_in_threadpool(_load_dataframe, file.file_type, file.file_path)
+            df = await run_in_threadpool(_load_dataframe, file.file_type, resolve_upload_path(file.file_path))
         
         if df is None:
             raise HTTPException(
@@ -78,13 +80,16 @@ async def send_message(
         
         # Get conversation history for memory
         previous_messages = db.query(Message).filter(
-            Message.conversation_id == conversation.id
+            Message.conversation_id == conversation_id
         ).order_by(Message.timestamp).all()
         
         conversation_memory = [
             {"role": msg.role, "content": msg.content}
             for msg in previous_messages[:-1]  # Exclude the current message
         ]
+        # Release the sync DB connection before the long-running async LLM call.
+        db.close()
+
         # TODO remove this memory limit after we have better handling in the agent
         # conversation_memory = []
         # Use a specific timeout for local LLMs
@@ -101,7 +106,7 @@ async def send_message(
         print(f"\n\nAgent Result: {json.dumps(result, default=str)}")
         # Save assistant response
         assistant_message = Message(
-            conversation_id=conversation.id,
+            conversation_id=conversation_id,
             role="assistant",
             content=result["answer"],
             generated_code=result.get("generated_code"),
@@ -123,7 +128,7 @@ async def send_message(
     except Exception as e:
         # Save error message
         error_message = Message(
-            conversation_id=conversation.id,
+            conversation_id=conversation_id,
             role="assistant",
             content=f"I encountered an error: {str(e)}"
         )
